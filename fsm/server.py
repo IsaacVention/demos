@@ -14,6 +14,8 @@ def get_state():
     return {
         "state": fsm.state,
         "simulate_failure": fsm.simulate_failure,
+        "recover_at_last_motion": fsm.recover_at_last_motion,
+        "last_state": fsm.last_state,
     }
 
 
@@ -22,10 +24,12 @@ async def reset():
     fsm.reset()
     return JSONResponse(content={"result": "reset"})
 
+
 @app.post("/fsm/start")
 async def start():
     fsm.start()
     return {"result": "start"}
+
 
 @app.post("/fsm/to_fault")
 async def to_fault():
@@ -37,6 +41,12 @@ async def to_fault():
 def set_simulate_failure(flag: bool):
     fsm.simulate_failure = flag
     return JSONResponse(content={"simulate_failure": fsm.simulate_failure})
+
+
+@app.post("/fsm/set_recover_last_motion")
+def set_recover(flag: bool):
+    fsm.recover_at_last_motion = flag
+    return JSONResponse(content={"recover_at_last_motion": fsm.recover_at_last_motion})
 
 
 @app.get("/")
