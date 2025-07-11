@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>FSM Control Panel</title>
+</head>
+<body>
+  <h1>FSM State</h1>
+  <pre id="state">Loading...</pre>
+
+  <button id="resetButton" onclick="reset()">Reset</button>
+  <button id="startButton" onclick="start()">Start</button>
+  <button id="estopButton" onclick="toFault()">Estop</button>
+  <label>
+    <input type="checkbox" id="simulateFailure" onchange="toggleFailure()" />
+    Simulate failure in placing
+  </label>
+
+  <script>
+    async function fetchState() {
+      const res = await fetch('/fsm/state');
+      const json = await res.json();
+      const state = json.state;
+      document.getElementById('state').innerText = JSON.stringify(json, null, 2);
+      document.getElementById('simulateFailure').checked = json.simulate_failure;
+
+      if(state === 'fault'){
+        document.getElementById('resetButton').disabled = false;  
+        document.getElementById('startButton').disabled = true;
+      }
+      else if(state === 'ready'){
+        document.getElementById('startButton').disabled = false;
+      }
+    }
+
+    async function reset() {
+      await fetch('/fsm/reset', { method: 'POST' });
+      await fetchState();
+    }
+
+    async function start() {
+      await fetch('/fsm/start', { method: 'POST' });
+      await fetchState();
+    }
+
+    async function toFault() {
+      await fetch('/fsm/to_fault', { method: 'POST' });
+      await fetchState();
+    }
+
+    async function toggleFailure() {
+      const flag = document.getElementById('simulateFailure').checked;
+      await fetch('/fsm/set_simulate_failure?flag=' + flag, { method: 'POST' });
+      await fetchState();
+    }
+
+    setInterval(fetchState, 1000);
+    fetchState();
+  </script>
+</body>
+</html>
