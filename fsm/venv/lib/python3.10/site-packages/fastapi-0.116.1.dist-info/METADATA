@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: fastapi
-Version: 0.116.0
+Version: 0.116.1
 Summary: FastAPI framework, high performance, easy to learn, fast to code, ready for production
 Author-Email: =?utf-8?q?Sebasti=C3=A1n_Ram=C3=ADrez?= <tiangolo@gmail.com>
 Classifier: Intended Audience :: Information Technology
@@ -38,7 +38,7 @@ Project-URL: Repository, https://github.com/fastapi/fastapi
 Project-URL: Issues, https://github.com/fastapi/fastapi/issues
 Project-URL: Changelog, https://fastapi.tiangolo.com/release-notes/
 Requires-Python: >=3.8
-Requires-Dist: starlette<0.47.0,>=0.40.0
+Requires-Dist: starlette<0.48.0,>=0.40.0
 Requires-Dist: pydantic!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4
 Requires-Dist: typing-extensions>=4.8.0
 Provides-Extra: standard

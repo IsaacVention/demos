@@ -26,8 +26,6 @@
       const json = await res.json();
       const state = json.state;
       document.getElementById('state').innerText = `State: ${state.replace('_', ' -> ')}`;
-      document.getElementById('simulateFailure').checked = json.simulate_failure;
-      document.getElementById('toggleRecovery').checked = json.recover_at_last_motion;
 
       if(state === 'fault'){
         document.getElementById('resetButton').disabled = false;  

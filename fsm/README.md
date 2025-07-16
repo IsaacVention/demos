@@ -18,5 +18,5 @@ pip install -r requirements.txt
 🚀 Running the Demo
 	1.	Start the server
 ```bash
-    uvicorn server:app --reload
+    python -m uvicorn server:app --reload
 ```
