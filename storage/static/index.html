@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Storage Demo</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2em;
+      }
+      label,
+      input,
+      select {
+        margin: 0.3em;
+      }
+      table {
+        border-collapse: collapse;
+        margin-top: 1em;
+      }
+      th,
+      td {
+        border: 1px solid #ccc;
+        padding: 0.4em;
+      }
+      #auditLog {
+        margin-top: 2em;
+      }
+      .editInputs {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Storage Demo</h1>
+
+    <div id="userPrompt">
+      <label>Your Name: <input id="usernameInput" /></label>
+      <button onclick="setUsername()">Save</button>
+    </div>
+
+    <div id="mainUI" style="display: none">
+      <label>
+        Select Component:
+        <select id="componentSelect" onchange="loadRecords()">
+          <option value="gripper">Gripper</option>
+          <option value="scanner">Scanner</option>
+        </select>
+      </label>
+
+      <div id="recordForm"></div>
+
+      <table id="recordsTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Fields</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <h2>Last 10 Audit Entries</h2>
+      <table id="auditLog">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>User</th>
+            <th>Operation</th>
+            <th>Component</th>
+            <th>Diff</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <script>
+      const username = localStorage.getItem("username");
+      if (username) {
+        document.getElementById("mainUI").style.display = "block";
+        document.getElementById("userPrompt").style.display = "none";
+        loadRecords();
+        loadAudit();
+      }
+
+      function setUsername() {
+        const name = document.getElementById("usernameInput").value.trim();
+        if (name) {
+          localStorage.setItem("username", name);
+          location.reload();
+        }
+      }
+
+      function getHeaders() {
+        return {
+          "Content-Type": "application/json",
+          "X-User": localStorage.getItem("username"),
+        };
+      }
+
+      async function loadRecords() {
+        const comp = document.getElementById("componentSelect").value;
+        const res = await fetch(`/${comp}/`);
+        const records = await res.json();
+
+        // Build creation form dynamically
+        const formDiv = document.getElementById("recordForm");
+        formDiv.innerHTML = "";
+        if (comp === "gripper") {
+          formDiv.innerHTML = `
+            <label>Length: <input id="length" type="number" step="0.01"></label>
+            <label>Width: <input id="width" type="number" step="0.01"></label>
+            <button onclick="createRecord()">Create Gripper</button>
+          `;
+        } else if (comp === "scanner") {
+          formDiv.innerHTML = `
+            <label>Port: <input id="port" type="number"></label>
+            <label>Auto Tune: <input id="autoTune" type="checkbox"></label>
+            <button onclick="createRecord()">Create Scanner</button>
+          `;
+        }
+
+        // Populate table with records
+        const tbody = document.querySelector("#recordsTable tbody");
+        tbody.innerHTML = "";
+        for (const r of records) {
+          let editFields = "";
+          if (comp === "gripper") {
+            editFields = `
+              <div class="editInputs">
+                <label>Length: <input id="edit_length_${r.id}" type="number" value="${r.length}" step="0.01"></label>
+                <label>Width: <input id="edit_width_${r.id}" type="number" value="${r.width}" step="0.01"></label>
+                <button onclick="saveEdit(${r.id})">Save</button>
+              </div>
+            `;
+          } else if (comp === "scanner") {
+            editFields = `
+              <div class="editInputs">
+                <label>Port: <input id="edit_port_${
+                  r.id
+                }" type="number" value="${r.port}"></label>
+                <label>Auto Tune: <input id="edit_autoTune_${
+                  r.id
+                }" type="checkbox" ${r.auto_tune ? "checked" : ""}></label>
+                <button onclick="saveEdit(${r.id})">Save</button>
+              </div>
+            `;
+          }
+
+          const fields = Object.entries(r)
+            .filter(([k]) => k !== "id")
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(", ");
+
+          tbody.innerHTML += `
+            <tr>
+              <td>${r.id}</td>
+              <td>${fields}<br>${editFields}</td>
+              <td><button onclick="deleteRecord(${r.id})">Delete</button></td>
+            </tr>`;
+        }
+      }
+
+      async function createRecord() {
+        const comp = document.getElementById("componentSelect").value;
+        let payload = {};
+        if (comp === "gripper") {
+          payload = {
+            length: parseFloat(document.getElementById("length").value),
+            width: parseFloat(document.getElementById("width").value),
+          };
+        } else if (comp === "scanner") {
+          payload = {
+            port: parseInt(document.getElementById("port").value),
+            auto_tune: document.getElementById("autoTune").checked,
+          };
+        }
+        const res = await fetch(`/${comp}/`, {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          alert("Error creating record");
+        }
+        await loadRecords();
+        await loadAudit();
+      }
+
+      async function saveEdit(id) {
+        const comp = document.getElementById("componentSelect").value;
+        let payload = {};
+        if (comp === "gripper") {
+          payload = {
+            length: parseFloat(
+              document.getElementById(`edit_length_${id}`).value
+            ),
+            width: parseFloat(
+              document.getElementById(`edit_width_${id}`).value
+            ),
+          };
+        } else if (comp === "scanner") {
+          payload = {
+            port: parseInt(document.getElementById(`edit_port_${id}`).value),
+            auto_tune: document.getElementById(`edit_autoTune_${id}`).checked,
+          };
+        }
+        const res = await fetch(`/${comp}/${id}`, {
+          method: "PUT",
+          headers: getHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          alert("Error updating record");
+        }
+        await loadRecords();
+        await loadAudit();
+      }
+
+      async function deleteRecord(id) {
+        const comp = document.getElementById("componentSelect").value;
+        await fetch(`/${comp}/${id}`, {
+          method: "DELETE",
+          headers: getHeaders(),
+        });
+        await loadRecords();
+        await loadAudit();
+      }
+
+      async function loadAudit() {
+        const res = await fetch("/audit");
+        const entries = await res.json();
+        const tbody = document.querySelector("#auditLog tbody");
+        tbody.innerHTML = "";
+        console.log(entries);
+        for (const e of entries) {
+          tbody.innerHTML += `
+            <tr>
+              <td>${new Date(e.timestamp).toLocaleString()}</td>
+              <td>${e.user}</td>
+              <td>${e.operation}</td>
+              <td>${e.component}</td>
+              <td><pre>${JSON.stringify(e.diff, null, 1)}</pre></td>
+            </tr>`;
+        }
+      }
+    </script>
+  </body>
+</html>
