@@ -1,6 +1,4 @@
----
-
-## 🛠️ Prerequisites
+## Prerequisites
 
 - Python 3.10+  
 - [transitions[asyncio]](https://pypi.org/project/transitions/)  
@@ -20,3 +18,5 @@ pip install -r requirements.txt
 ```bash
     python -m uvicorn server:app --reload
 ```
+The core of the deliverable is fsm.py and fsm_router.py.
+The "demo" components are app.py and server.py, all demo related business logic lives in one of the two.
