@@ -1,5 +1,3 @@
-# /orchestrator/storage.py
-
 import os
 import importlib.util
 from datetime import datetime
@@ -10,10 +8,7 @@ from sqlmodel import SQLModel, create_engine, Session, select, Field
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy import Column, func
 
-# You can adjust this limit per model if desired
 MAX_RECORDS_PER_MODEL = 5
-
-# SQLite database file in the /storage directory
 DATABASE_URL = "sqlite:///./storage.db"
 
 engine = create_engine(DATABASE_URL, echo=True)
@@ -178,16 +173,12 @@ def bootstrap(app):
     Orchestrates discovery, migration, and CRUD router registration
     """
     models = discover_models()
-
-    # Create all tables (models + audit)
     SQLModel.metadata.create_all(engine)
 
-    # Register CRUD routers
     for component, model in models:
         router = build_crud_router(component, model)
         app.include_router(router)
 
-    # Audit log endpoint
     audit_router = APIRouter()
 
     @audit_router.get("/audit")
