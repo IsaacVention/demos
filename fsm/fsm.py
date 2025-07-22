@@ -1,30 +1,30 @@
 import asyncio
 from transitions.extensions.asyncio import HierarchicalMachine as HSM
 
-
 class FoundationFSM(HSM):
-    def __init__(
-        self,
-        *args,
-        states=None,
-        enable_last_state_recovery=True,
-        **kw,
-    ):
+    def __init__(self, *args, states=None, enable_last_state_recovery=True, **kw):
+        self._decorator_bindings = []
+        self._exit_decorator_bindings = []
+        self._declared_states = states or []
+
+        self._discover_decorated_handlers()
         super().__init__(
             states=(states or []) + ["ready", "fault"],
             initial="ready",
             send_event=True,
             **kw,
         )
+
+        self._bind_decorated_handlers()
+
+        # Init rest
         self._declared_states = states or []
-        self._tasks: set[asyncio.Task] = set()
-        self._timeouts: dict[str, asyncio.Task] = {}
+        self._tasks = set()
+        self._timeouts = {}
         self._last_state = None
         self._enable_recovery = enable_last_state_recovery
-
         self.add_transition("to_fault", "*", "fault", before="cancel_tasks")
         self.add_transition("reset", "fault", "ready")
-
         self._attach_after_hooks()
 
     # ---------- Task Lifecycle ----------
@@ -105,3 +105,53 @@ class FoundationFSM(HSM):
     def _attach_exit_timeout_clear(self, event):
         exited_state = event.transition.source
         self._clear_timeout(exited_state)
+        
+    # ---------- Decorators ----------
+    def _discover_decorated_handlers(self):
+        for attr in dir(self.__class__):
+            fn = getattr(self.__class__, attr, None)
+            if callable(fn) and hasattr(fn, "_on_enter_state"):
+                state = fn._on_enter_state
+                self._decorator_bindings.append((state, "enter", fn))
+            if callable(fn) and hasattr(fn, "_on_exit_state"):
+                self._exit_decorator_bindings.append((fn._on_exit_state, "exit", fn))
+
+    def _bind_decorated_handlers(self):
+        for state_name, hook_type, fn in self._decorator_bindings + self._exit_decorator_bindings:
+            base_handler = fn.__get__(self)
+            if hook_type == "enter":
+                timeout_cfg = getattr(fn, "_timeout_config", None)
+                if timeout_cfg:
+                    seconds, trigger = timeout_cfg
+                    def make_wrapped(base_handler, state, seconds, trigger):
+                        def wrapped(event):
+                            self.set_timeout(state, seconds, trigger)
+                            return base_handler(event)
+                        return wrapped
+                    handler = make_wrapped(base_handler, state_name, seconds, trigger)
+                else:
+                    handler = base_handler
+            else:
+                handler = base_handler
+
+            state_obj = self.get_state(state_name)
+            if state_obj:
+                state_obj.add_callback(hook_type, handler)
+                
+def on_enter_state(state_name: str):
+    def decorator(fn):
+        fn._on_enter_state = state_name
+        return fn
+    return decorator
+
+def on_exit_state(state_name: str):
+    def decorator(fn):
+        fn._on_exit_state = state_name
+        return fn
+    return decorator
+
+def auto_timeout(seconds: float, trigger: str = "to_fault"):
+    def decorator(fn):
+        fn._timeout_config = (seconds, trigger)
+        return fn
+    return decorator
