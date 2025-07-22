@@ -27,6 +27,7 @@ class CellFSM(FoundationFSM):
         self.simulate_failure = False
 
     def on_enter_running_picking(self, _):
+        self.set_timeout("running_picking", 5.0, "to_fault")
         self._maybe_fail_or_continue(3, self.finished_picking, "running_picking")
 
     def on_enter_running_placing(self, _):
