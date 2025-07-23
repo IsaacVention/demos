@@ -1,70 +1,138 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <meta charset="UTF-8" />
-  <title>FSM Control Panel</title>
-</head>
-<body>
-  <h1>FSM State</h1>
-  <pre id="state">Loading...</pre>
-
-  <button id="resetButton" onclick="reset()">Reset</button>
-  <button id="startButton" onclick="start()">Start</button>
-  <button id="estopButton" onclick="toFault()">Estop</button>
-  <label>
-    <input type="checkbox" id="simulateFailure" onchange="toggleFailure()" />
-    Simulate failure in next motion
-  </label>
-  <label>
-    <input type="checkbox" id="toggleRecovery" onchange="toggleRecovery()" />
-    Resume last motion on recovery
-  </label>
-
-  <script>
-    async function fetchState() {
-      const res = await fetch('/fsm/state');
-      const json = await res.json();
-      const state = json.state;
-      document.getElementById('state').innerText = `State: ${state.replace('_', ' -> ')}`;
-
-      if(state === 'fault'){
-        document.getElementById('resetButton').disabled = false;  
-        document.getElementById('startButton').disabled = true;
+  <head>
+    <meta charset="UTF-8" />
+    <title>FSM Control Panel</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 1rem;
       }
-      else if(state === 'ready'){
-        document.getElementById('startButton').disabled = false;
+      table {
+        border-collapse: collapse;
+        margin-top: 1rem;
+        width: 100%;
       }
-    }
+      th,
+      td {
+        border: 1px solid #ccc;
+        padding: 0.3rem 0.5rem;
+        text-align: left;
+      }
+      th {
+        background: #f2f2f2;
+      }
+      tr.live td {
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>FSM State</h1>
+    <pre id="state">Loading...</pre>
 
-    async function reset() {
-      await fetch('/fsm/reset', { method: 'POST' });
-      await fetchState();
-    }
+    <button id="resetButton" onclick="reset()">Reset</button>
+    <button id="startButton" onclick="start()">Start</button>
+    <button id="estopButton" onclick="toFault()">Estop</button>
+    <label>
+      <input type="checkbox" id="simulateFailure" onchange="toggleFailure()" />
+      Simulate failure in next motion
+    </label>
+    <label>
+      <input type="checkbox" id="toggleRecovery" onchange="toggleRecovery()" />
+      Resume last motion on recovery
+    </label>
+    <h2>State History (latest first)</h2>
+    <table id="historyTable">
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Started&nbsp;at</th>
+          <th>Duration&nbsp;(ms)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <h2>FSM Diagram</h2>
+    <img
+      id="diagram"
+      src="/fsm/diagram.svg?ts=0"
+      alt="FSM diagram (Graphviz)"
+    />
 
-    async function start() {
-      await fetch('/fsm/start', { method: 'POST' });
-      await fetchState();
-    }
+    <script>
+      const isoShort = (iso) =>
+        new Date(iso).toLocaleString(undefined, { hour12: false });
 
-    async function toFault() {
-      await fetch('/fsm/to_fault', { method: 'POST' });
-      await fetchState();
-    }
+      function buildRow(entry, isLive) {
+        const tr = document.createElement("tr");
+        if (isLive) tr.classList.add("live");
+        tr.innerHTML = `
+        <td>${entry.state.replace("_", " / ")}</td>
+        <td>${isoShort(entry.timestamp)}</td>
+        <td>${entry.duration_ms ?? "…"}</td>`;
+        return tr;
+      }
 
-    async function toggleFailure() {
-      const flag = document.getElementById('simulateFailure').checked;
-      await fetch('/fsm/set_simulate_failure?flag=' + flag, { method: 'POST' });
-      await fetchState();
-    }
+      async function fetchState() {
+        const res = await fetch("/fsm/state");
+        const stateObj = await res.json();
+        const state = stateObj.state;
+        document.getElementById("state").innerText = `State: ${state.replace(
+          "_",
+          " → "
+        )}`;
 
-    async function toggleRecovery() {
-      const flag = document.getElementById('toggleRecovery').checked;
-      await fetch('/fsm/set_recover_last_motion?flag=' + flag, { method: 'POST' });
-      await fetchState();
-    }
+        // Button enable/disable logic (unchanged) -----------------------------
+        document.getElementById("resetButton").disabled = state !== "fault";
+        document.getElementById("startButton").disabled = state !== "ready";
 
-    setInterval(fetchState, 1000);
-    fetchState();
-  </script>
-</body>
+        // History table --------------------------------------------------------
+        const histRes = await fetch("/fsm/history?last=10");
+        const history = (await histRes.json()).history;
+        const tbody = document.querySelector("#historyTable tbody");
+        tbody.innerHTML = "";
+        document.getElementById("diagram").src =
+          "/fsm/diagram.svg?ts=" + Date.now();
+        for (let i = history.length - 1; i >= 0; i--) {
+          const row = buildRow(history[i], i === history.length - 1);
+          tbody.appendChild(row);
+        }
+      }
+
+      async function reset() {
+        await fetch("/fsm/reset", { method: "POST" });
+        await fetchState();
+      }
+
+      async function start() {
+        await fetch("/fsm/start", { method: "POST" });
+        await fetchState();
+      }
+
+      async function toFault() {
+        await fetch("/fsm/to_fault", { method: "POST" });
+        await fetchState();
+      }
+
+      async function toggleFailure() {
+        const flag = document.getElementById("simulateFailure").checked;
+        await fetch("/fsm/set_simulate_failure?flag=" + flag, {
+          method: "POST",
+        });
+        await fetchState();
+      }
+
+      async function toggleRecovery() {
+        const flag = document.getElementById("toggleRecovery").checked;
+        await fetch("/fsm/set_recover_last_motion?flag=" + flag, {
+          method: "POST",
+        });
+        await fetchState();
+      }
+
+      setInterval(fetchState, 1000);
+      fetchState();
+    </script>
+  </body>
 </html>

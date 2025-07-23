@@ -1,6 +1,6 @@
 # fsm_router.py
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import asyncio
 
 def build_fsm_router(fsm, triggers=None):
@@ -12,6 +12,19 @@ def build_fsm_router(fsm, triggers=None):
             "state": fsm.state,
             "last_state": fsm.get_last_state(),
         }
+    
+    @router.get("/history")
+    def get_history(last: int | None = None):
+        data = fsm.last(last) if last else fsm.history
+        return {"history": data, "buffer_size": len(fsm.history)}
+    
+    from fastapi import Response
+
+    @router.get("/diagram.svg", response_class=Response)
+    def fsm_svg():
+        g = fsm.get_graph()
+        svg_bytes = g.pipe(format="svg")
+        return Response(content=svg_bytes, media_type="image/svg+xml")
 
     if triggers is None:
         triggers = sorted(fsm.events.keys())
@@ -32,5 +45,6 @@ def build_fsm_router(fsm, triggers=None):
             methods=["POST"],
             name=f"{trigger_name}_trigger",
         )
+        
 
     return router

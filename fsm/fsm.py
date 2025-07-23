@@ -1,8 +1,14 @@
 import asyncio
-from transitions.extensions.asyncio import HierarchicalMachine as HSM
+from collections import deque
+from datetime import datetime, timezone
+from functools import lru_cache
+import importlib
+from transitions.extensions import HierarchicalGraphMachine as HSM
+from transitions.core import State
 
 class FoundationFSM(HSM):
-    def __init__(self, *args, states=None, enable_last_state_recovery=True, **kw):
+    DEFAULT_HISTORY_SIZE = 1_000
+    def __init__(self, *args, states=None, history_size=None, enable_last_state_recovery=True, **kw):
         self._decorator_bindings = []
         self._exit_decorator_bindings = []
         self._declared_states = states or []
@@ -14,7 +20,8 @@ class FoundationFSM(HSM):
             send_event=True,
             **kw,
         )
-
+        self._history = deque(maxlen=history_size or self.DEFAULT_HISTORY_SIZE)
+        self._current_start = None
         self._bind_decorated_handlers()
 
         # Init rest
@@ -73,35 +80,49 @@ class FoundationFSM(HSM):
     def start(self):
         if self._enable_recovery and self._last_state:
             self.set_state(self._last_state)
-            self._invoke_on_enter(self._last_state)
+            self._run_enter_callbacks(self._last_state)
         else:
             self.trigger("start")
-
-    def _invoke_on_enter(self, state_name: str):
-        handler_name = f"on_enter_{state_name}"
-        handler = getattr(self, handler_name, None)
-        if handler:
-            handler(None)
-
+            
+    def _run_enter_callbacks(self, state_name: str):
+        state_obj = self.get_state(state_name)
+        for cb in getattr(state_obj, "enter", []):
+            cb(None)
     def on_enter_ready(self, _):
         if not self._enable_recovery:
             self._last_state = None
+            
+    # ------------- Hooks ----------------
+    def _is_leaf(self, state: State | str) -> bool:
+        obj = self.get_state(state) if isinstance(state, str) else state
+        return not getattr(obj, "children", [])
 
-    # ---------- Hooks ----------
-    def _record_last_state_event(self, event):
-        if event.state.name in ("ready", "fault"):
-            return
-        if not getattr(event.state, "children", []):
-            self._last_state = event.transition.dest
+            
+    def _record_history_event(self, event):
+        now = datetime.now(timezone.utc)
+        leaf_name = event.transition.dest
+        
+        if self._history and self._current_start is not None:
+            elapsed = (now - self._current_start).total_seconds() * 1000  # ms
+            self._history[-1]["duration_ms"] = int(elapsed)
+            
+        self._history.append({
+            "timestamp": datetime.now(
+                timezone.utc),
+            "state": leaf_name
+        })
+        
+        self._current_start = now
+        if leaf_name not in ("ready", "fault") and self._is_leaf(leaf_name):
+            self._last_state = leaf_name
 
     def _attach_after_hooks(self):
-        for trigger_name, event in self.events.items():
-            if trigger_name in ("reset",):
-                continue
+        for _, event in self.events.items():
             for transitions_for_source in event.transitions.values():
                 for t in transitions_for_source:
-                    t.add_callback("after", self._record_last_state_event)
+                    t.add_callback("after", self._record_history_event)
                     t.add_callback("after", self._attach_exit_timeout_clear)
+                    
     def _attach_exit_timeout_clear(self, event):
         exited_state = event.transition.source
         self._clear_timeout(exited_state)
@@ -137,6 +158,16 @@ class FoundationFSM(HSM):
             state_obj = self.get_state(state_name)
             if state_obj:
                 state_obj.add_callback(hook_type, handler)
+                
+    # ---------- History API ----------
+    @property
+    def history(self):
+        return list(self._history)
+
+    def last(self, n: int = 10):
+        if n <= 0:
+            return []
+        return list(self._history)[-n:]
                 
 def on_enter_state(state_name: str):
     def decorator(fn):

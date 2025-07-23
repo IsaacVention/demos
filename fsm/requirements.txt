@@ -2,3 +2,5 @@ uvicorn
 fastapi
 asyncio
 transitions
+pydot
+graphviz

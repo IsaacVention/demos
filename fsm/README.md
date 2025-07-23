@@ -6,7 +6,7 @@
 - [uvicorn](https://pypi.org/project/uvicorn/)  
 
 You can install all dependencies with:
-
+FYI: graphviz must be installed through brew on macOS
 ```bash
 python -m venv venv
 source venv/bin/activate

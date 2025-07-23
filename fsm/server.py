@@ -1,4 +1,3 @@
-# server.py
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from app import CellFSM, STATES, TRANSITIONS
