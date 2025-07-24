@@ -4,14 +4,16 @@ from datetime import datetime
 from typing import List, Type, Any
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
-from sqlmodel import SQLModel, create_engine, Session, select, Field
+from sqlmodel import SQLModel, Session, select, Field
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy import Column, func
+from orchestrator.accessor import ModelAccessor
+import sys
+from orchestrator.db import engine
 
 MAX_RECORDS_PER_MODEL = 5
-DATABASE_URL = "sqlite:///./storage.db"
 
-engine = create_engine(DATABASE_URL, echo=True)
+storage_module = sys.modules[__name__]
 
 
 # -------- AUDIT MODEL --------
@@ -178,6 +180,8 @@ def bootstrap(app):
     for component, model in models:
         router = build_crud_router(component, model)
         app.include_router(router)
+        accessor = ModelAccessor(model)
+        setattr(storage_module, component, accessor)
 
     audit_router = APIRouter()
 
@@ -190,4 +194,3 @@ def bootstrap(app):
             return entries
 
     app.include_router(audit_router)
-

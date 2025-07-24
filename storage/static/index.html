@@ -159,7 +159,13 @@
             <tr>
               <td>${r.id}</td>
               <td>${fields}<br>${editFields}</td>
-              <td><button onclick="deleteRecord(${r.id})">Delete</button></td>
+              <td>
+                  <button onclick="deleteRecord(${r.id})">Delete</button>
+                  ${
+                    comp === "gripper" ? `<button onclick="alertCOM(${r.id})">COM</button>` : ""
+                  }
+              </td>
+
             </tr>`;
         }
       }
@@ -188,6 +194,19 @@
         }
         await loadRecords();
         await loadAudit();
+      }
+
+      async function alertCOM(id) {
+        const res = await fetch(`/gripper-center/${id}`, {
+          method: "GET",
+          headers: getHeaders(),
+        });
+        if (!res.ok) {
+          alert("Failed to fetch center of mass");
+          return;
+        }
+        const data = await res.json();
+        alert(`Center of Mass: (${data.center[0]}, ${data.center[1]})`);
       }
 
       async function saveEdit(id) {
