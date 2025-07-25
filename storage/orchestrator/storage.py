@@ -1,29 +1,14 @@
-from datetime import datetime
-from typing import List, Type, Optional
+from typing import List, Type
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
-from sqlmodel import SQLModel, Session, select, Field
-from sqlalchemy.dialects.sqlite import JSON
-from sqlalchemy import Column, func
+from sqlmodel import SQLModel, Session, select
+from sqlalchemy import func
 
 from orchestrator.accessor import ModelAccessor
 from orchestrator.db import engine
-
+from orchestrator.auditor import audit_operation, AuditLog
 
 MAX_RECORDS_PER_MODEL = 5
-
-
-# -------- AUDIT MODEL --------
-
-
-class AuditLog(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime
-    component: str
-    operation: str  # create / update / delete
-    record_id: int
-    user: str
-    diff: dict = Field(sa_column=Column(JSON))
 
 
 # -------- USER DEPENDENCY --------
@@ -71,15 +56,15 @@ def build_crud_router(component: str, model: Type[SQLModel]) -> APIRouter:
             session.commit()
             session.refresh(data)
 
-            audit = AuditLog(
-                timestamp=datetime.utcnow(),
+            audit_operation(
+                session=session,
                 component=component,
                 operation="create",
                 record_id=data.id,
                 user=user,
                 diff=data.model_dump(),
             )
-            session.add(audit)
+
             session.commit()
             return data
 
@@ -101,15 +86,15 @@ def build_crud_router(component: str, model: Type[SQLModel]) -> APIRouter:
             session.commit()
             session.refresh(obj)
 
-            audit = AuditLog(
-                timestamp=datetime.utcnow(),
+            audit_operation(
+                session=session,
                 component=component,
                 operation="update",
                 record_id=record_id,
                 user=user,
                 diff={"before": before, "after": obj.model_dump()},
             )
-            session.add(audit)
+
             session.commit()
             return obj
 
@@ -124,15 +109,15 @@ def build_crud_router(component: str, model: Type[SQLModel]) -> APIRouter:
             session.delete(obj)
             session.commit()
 
-            audit = AuditLog(
-                timestamp=datetime.utcnow(),
+            audit_operation(
+                session=session,
                 component=component,
                 operation="delete",
                 record_id=record_id,
                 user=user,
                 diff=before,
             )
-            session.add(audit)
+
             session.commit()
             return JSONResponse(content={"status": "deleted"})
 
@@ -143,7 +128,6 @@ def build_crud_router(component: str, model: Type[SQLModel]) -> APIRouter:
 
 
 def bootstrap(app, models: List[tuple[str, Type[SQLModel], ModelAccessor]]):
-
     SQLModel.metadata.create_all(engine)
 
     for component, model, accessor in models:

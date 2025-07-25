@@ -10,8 +10,8 @@ from components.scanner.models import Scanner
 # --------- BOOTSTRAP APP ---------
 app = FastAPI()
 
-grippers = ModelAccessor(Gripper)
-scanners = ModelAccessor(Scanner)
+grippers = ModelAccessor(Gripper, "gripper")
+scanners = ModelAccessor(Scanner, "scanner")
 
 bootstrap(
     app,
