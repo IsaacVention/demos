@@ -1,15 +1,15 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from app import CellFSM, STATES, TRANSITIONS
+from app import CellFSM
 from fastapi.responses import FileResponse
-from fsm_router import build_fsm_router
+from router import build_router
 
-fsm = CellFSM(states=STATES, transitions=TRANSITIONS)
+fsm = CellFSM()
 
 fsm.start()
 
 app = FastAPI()
-fsm_router = build_fsm_router(fsm)
+fsm_router = build_router(fsm)
 app.include_router(fsm_router, prefix="/fsm")
 
 @app.post("/fsm/set_simulate_failure")

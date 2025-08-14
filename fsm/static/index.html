@@ -53,12 +53,6 @@
       </thead>
       <tbody></tbody>
     </table>
-    <h2>FSM Diagram</h2>
-    <img
-      id="diagram"
-      src="/fsm/diagram.svg?ts=0"
-      alt="FSM diagram (Graphviz)"
-    />
 
     <script>
       const isoShort = (iso) =>
@@ -75,6 +69,9 @@
       }
 
       async function fetchState() {
+        const diagramJson = await fetch("/fsm/diagram.json");
+        const diagram = await diagramJson.json();
+        console.log("Diagram:", diagram);
         const res = await fetch("/fsm/state");
         const stateObj = await res.json();
         const state = stateObj.state;
@@ -90,15 +87,14 @@
         // History table --------------------------------------------------------
         const histRes = await fetch("/fsm/history?last=10");
         const history = (await histRes.json()).history;
+        console.log("History:", history);
+        
         const tbody = document.querySelector("#historyTable tbody");
         tbody.innerHTML = "";
-        document.getElementById("diagram").src =
-          "/fsm/diagram.svg?ts=" + Date.now();
         for (let i = history.length - 1; i >= 0; i--) {
           const row = buildRow(history[i], i === history.length - 1);
           tbody.appendChild(row);
-        }
-      }
+        }      }
 
       async function reset() {
         await fetch("/fsm/reset", { method: "POST" });
