@@ -1,4 +1,4 @@
-#!/Users/isaac.mills/git/demos/fsm/venv/bin/python3
+#!/Users/isaac.mills/git/demos/fsm/venv/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys

@@ -1,7 +1,3 @@
 uvicorn
 fastapi
-asyncio
-transitions
-pydot
-graphviz
-python-state-machine
+vention-state-machine
