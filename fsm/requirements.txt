@@ -4,3 +4,4 @@ asyncio
 transitions
 pydot
 graphviz
+python-state-machine

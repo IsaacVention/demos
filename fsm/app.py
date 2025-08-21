@@ -1,8 +1,8 @@
 import asyncio
-from core import StateMachine
-from defs import StateGroup, State, Trigger
-from decorators import on_enter_state, auto_timeout
-from core import BaseStates, BaseTriggers
+from state_machine.core import StateMachine
+from state_machine.defs import StateGroup, State, Trigger
+from state_machine.decorators import on_enter_state, auto_timeout
+from state_machine.core import BaseStates, BaseTriggers
 
 
 # ---------- State , Trigger & Transition Declarations ----------

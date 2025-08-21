@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from app import CellFSM
 from fastapi.responses import FileResponse
-from router import build_router
+from state_machine.router import build_router
 
 fsm = CellFSM()
 
