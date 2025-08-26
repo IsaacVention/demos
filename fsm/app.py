@@ -50,6 +50,7 @@ class CellFSM(StateMachine):
     def enter_fault(self, _):
         print("🔴 entering ready")
 
+    
     @on_enter_state(States.running.picking)
     @auto_timeout(5.0, Triggers.to_fault)
     def enter_picking(self, _):

@@ -1,6 +1,7 @@
 from sqlmodel import SQLModel, Field
+from typing import Optional
 
 class Scanner(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     port: int
     auto_tune: bool

@@ -184,6 +184,7 @@
             auto_tune: document.getElementById("autoTune").checked,
           };
         }
+        console.log(payload);
         const res = await fetch(`/${comp}/`, {
           method: "POST",
           headers: getHeaders(),

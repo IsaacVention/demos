@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from orchestrator.accessor import ModelAccessor
-from orchestrator.storage import bootstrap
+from storage.accessor import ModelAccessor
+from storage.bootstrap import bootstrap
 
 from components.gripper.models import Gripper
 from components.scanner.models import Scanner
@@ -15,10 +15,13 @@ grippers = ModelAccessor(Gripper, "gripper")
 scanners = ModelAccessor(Scanner, "scanner")
 
 # Create DB, serve rest endpoints
-bootstrap(
-    app,
-    models=[grippers, scanners],
-)
+
+bootstrap(app, accessors=[grippers, scanners])
+
+@grippers.before_update()
+def before_gripper_update(session, instance: Gripper):
+   if instance.length < 0:
+       raise ValueError("Gripper length cannot be negative")
 
 # --------- ROUTES ---------
 @app.get("/")
