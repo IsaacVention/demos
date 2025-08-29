@@ -75,7 +75,7 @@ def transaction() -> Iterator[Session]:
     Also sets CURRENT_SESSION for the duration, so accessors/hooks can reuse it.
     """
     engine = get_engine()
-    with Session(engine) as session:
+    with Session(engine, expire_on_commit=False) as session:
         token = CURRENT_SESSION.set(session)
         try:
             with session.begin():
@@ -99,7 +99,7 @@ def use_session(session: Optional[Session] = None) -> Iterator[Session]:
             CURRENT_SESSION.reset(token)
         return
 
-    with Session(get_engine()) as s:
+    with Session(get_engine(), expire_on_commit=False) as s:
         token = CURRENT_SESSION.set(s)
         try:
             yield s

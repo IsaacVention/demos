@@ -17,7 +17,7 @@ from typing import (
 from sqlmodel import SQLModel, Session, select
 
 from storage.auditor import audit_operation
-from storage.database import CURRENT_SESSION, get_engine, transaction, use_session
+from storage import database
 from storage.hooks import HookFn, HookRegistry, HookEvent
 from storage.utils import ModelType, utcnow
 
@@ -39,6 +39,7 @@ class ModelAccessor(Generic[ModelType]):
         self.model = model
         self.component = component_name
         self._hooks: HookRegistry[ModelType] = HookRegistry()
+        self._has_soft_delete = hasattr(model, "deleted_at")
 
     # ---------- Hook decorators ----------
     def before_insert(self) -> Callable[[HookFn[ModelType]], HookFn[ModelType]]:
@@ -61,48 +62,52 @@ class ModelAccessor(Generic[ModelType]):
 
     # ---------- Internal helpers ----------
     def _emit(self, event: HookEvent, *, session: Session, instance: ModelType) -> None:
-        # Make this session visible to any accessor calls done inside hooks.
-        with use_session(session):
+        """Make this session visible to any accessor calls done inside hooks."""
+        with database.use_session(session):
             self._hooks.emit(event, session=session, instance=instance)
 
     def _run_write(self, fn: Callable[[Session], WriteResult]) -> WriteResult:
         """Run a write op using the current session if present, else open a transaction."""
-        existing = CURRENT_SESSION.get()
+        existing = database.CURRENT_SESSION.get()
         if existing is not None:
             return fn(existing)
-        with transaction() as session:
+        with database.transaction() as session:
             return fn(session)
 
     @contextmanager
     def _read_session(self) -> Iterator[Session]:
         """Reuse current session if present; otherwise open a short-lived one."""
-        existing = CURRENT_SESSION.get()
+        existing = database.CURRENT_SESSION.get()
         if existing is not None:
             yield existing
         else:
-            with Session(get_engine()) as session:
+            with Session(database.get_engine(), expire_on_commit=False) as session:
                 yield session
 
     # ---------- Reads ----------
     def get(self, id: int, *, include_deleted: bool = False) -> Optional[ModelType]:
+        """Get a single model by id."""
         with self._read_session() as session:
             obj = session.get(self.model, id)
             if obj is None:
                 return None
-            if hasattr(obj, "deleted_at") and not include_deleted:
+            if self._has_soft_delete and not include_deleted:
                 if getattr(obj, "deleted_at") is not None:
                     return None
             return cast(ModelType, obj)
 
     def all(self, *, include_deleted: bool = False) -> List[ModelType]:
+        """Get all models."""
         with self._read_session() as session:
             statement = select(self.model)
-            if hasattr(self.model, "deleted_at") and not include_deleted:
+            if self._has_soft_delete and not include_deleted:
                 statement = statement.where(getattr(self.model, "deleted_at").is_(None))
             return cast(List[ModelType], session.exec(statement).all())
 
     # ---------- Writes ----------
     def insert(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
+        """Insert a new model."""
+
         def op(session: Session) -> ModelType:
             self._emit("before_insert", session=session, instance=obj)
             session.add(obj)
@@ -123,6 +128,8 @@ class ModelAccessor(Generic[ModelType]):
         return self._run_write(op)
 
     def save(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
+        """Save a model, creating it if it doesn't exist."""
+
         def op(session: Session) -> ModelType:
             obj_id = cast(Optional[int], getattr(obj, "id", None))
             if obj_id is None:
@@ -151,10 +158,9 @@ class ModelAccessor(Generic[ModelType]):
 
         return self._run_write(op)
 
-    def upsert(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
-        return self.save(obj, actor=actor)
-
     def delete(self, id: int, *, actor: str = "internal") -> bool:
+        """Delete a model."""
+
         def op(session: Session) -> bool:
             obj = session.get(self.model, id)
             if obj is None:
@@ -176,9 +182,11 @@ class ModelAccessor(Generic[ModelType]):
         return self._run_write(op)
 
     def restore(self, id: int, *, actor: str = "internal") -> bool:
+        """Restore a soft-deleted model."""
+
         def op(session: Session) -> bool:
             obj = session.get(self.model, id)
-            if obj is None or not hasattr(obj, "deleted_at"):
+            if obj is None or not self._has_soft_delete:
                 return False
             if getattr(obj, "deleted_at") is None:
                 return True
@@ -204,6 +212,8 @@ class ModelAccessor(Generic[ModelType]):
     def insert_many(
         self, objs: Sequence[ModelType], *, actor: str = "internal"
     ) -> List[ModelType]:
+        """Insert multiple models."""
+
         def op(session: Session) -> List[ModelType]:
             out: List[ModelType] = []
             for obj in objs:
@@ -228,6 +238,8 @@ class ModelAccessor(Generic[ModelType]):
         return self._run_write(op)
 
     def delete_many(self, ids: Sequence[int], *, actor: str = "internal") -> int:
+        """Delete multiple models."""
+
         def op(session: Session) -> int:
             count = 0
             for id_ in ids:

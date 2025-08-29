@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from typing import Callable, DefaultDict, Generic, List, TypeVar
 from collections import defaultdict
-from typing import Callable, DefaultDict, Generic, List
-from typing_extensions import Literal
-from sqlmodel import Session
-from storage.utils import ModelType
 
-HookFn = Callable[[Session, ModelType], None]
+from sqlmodel import Session, SQLModel
+from typing_extensions import Literal
+
+ModelRecord = TypeVar("ModelRecord", bound=SQLModel)
+
 HookEvent = Literal[
     "before_insert",
     "after_insert",
@@ -16,25 +17,31 @@ HookEvent = Literal[
     "after_delete",
 ]
 
+HookFn = Callable[[Session, ModelRecord], None]
 
-class HookRegistry(Generic[ModelType]):
+
+class HookRegistry(Generic[ModelRecord]):
     """Lightweight per-accessor registry for lifecycle hooks."""
 
     def __init__(self) -> None:
-        self._hooks: DefaultDict[str, List[HookFn[ModelType]]] = defaultdict(list)
+        self._hooks: DefaultDict[HookEvent, List[HookFn[ModelRecord]]] = defaultdict(
+            list
+        )
 
     def decorator(
         self, event: HookEvent
-    ) -> Callable[[HookFn[ModelType]], HookFn[ModelType]]:
+    ) -> Callable[[HookFn[ModelRecord]], HookFn[ModelRecord]]:
         """Return a decorator that registers a function for `event`."""
 
-        def deco(fn: HookFn[ModelType]) -> HookFn[ModelType]:
+        def deco(fn: HookFn[ModelRecord]) -> HookFn[ModelRecord]:
             self._hooks[event].append(fn)
             return fn
 
         return deco
 
-    def emit(self, event: HookEvent, *, session: Session, instance: ModelType) -> None:
+    def emit(
+        self, event: HookEvent, *, session: Session, instance: ModelRecord
+    ) -> None:
         """Invoke all hooks registered for `event`."""
         for fn in self._hooks.get(event, []):
             fn(session, instance)

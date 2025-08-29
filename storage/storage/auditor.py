@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any, Dict, Optional, cast
 
 from sqlalchemy import Column
 from sqlalchemy.dialects.sqlite import JSON
 from sqlmodel import Field, SQLModel, Session
 from storage.utils import utcnow
-from datetime import date
 import json
 
 __all__ = ["AuditLog", "audit_operation"]
