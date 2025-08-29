@@ -1,15 +1,28 @@
 from __future__ import annotations
 
-from storage.utils import utcnow
-from typing import Generic, List, Optional, Sequence, Type, cast, Any
+from contextlib import contextmanager
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    List,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+    cast,
+    Iterator,
+)
 
 from sqlmodel import SQLModel, Session, select
 
 from storage.auditor import audit_operation
-from storage.database import transaction, get_engine
-from storage.hooks import HookRegistry, HookFn
-from typing import Callable
-from storage.utils import ModelType
+from storage.database import CURRENT_SESSION, get_engine, transaction, use_session
+from storage.hooks import HookFn, HookRegistry, HookEvent
+from storage.utils import ModelType, utcnow
+
+
+WriteResult = TypeVar("WriteResult")
 
 
 class ModelAccessor(Generic[ModelType]):
@@ -19,7 +32,7 @@ class ModelAccessor(Generic[ModelType]):
       - atomic writes with auditing
       - optional soft delete (if model defines `deleted_at`)
       - batch helpers
-      - session binding for use inside hooks (cascades, etc.)
+      - implicit session reuse inside hooks (no .bind() needed)
     """
 
     def __init__(self, model: Type[ModelType], component_name: str) -> None:
@@ -46,14 +59,33 @@ class ModelAccessor(Generic[ModelType]):
     def after_delete(self) -> Callable[[HookFn[ModelType]], HookFn[ModelType]]:
         return self._hooks.decorator("after_delete")
 
-    # ---------- Session binder (for use inside hooks) ----------
-    def bind(self, session: Session) -> "BoundAccessor[ModelType]":
-        return BoundAccessor(self.model, self.component, session)
+    # ---------- Internal helpers ----------
+    def _emit(self, event: HookEvent, *, session: Session, instance: ModelType) -> None:
+        # Make this session visible to any accessor calls done inside hooks.
+        with use_session(session):
+            self._hooks.emit(event, session=session, instance=instance)
+
+    def _run_write(self, fn: Callable[[Session], WriteResult]) -> WriteResult:
+        """Run a write op using the current session if present, else open a transaction."""
+        existing = CURRENT_SESSION.get()
+        if existing is not None:
+            return fn(existing)
+        with transaction() as session:
+            return fn(session)
+
+    @contextmanager
+    def _read_session(self) -> Iterator[Session]:
+        """Reuse current session if present; otherwise open a short-lived one."""
+        existing = CURRENT_SESSION.get()
+        if existing is not None:
+            yield existing
+        else:
+            with Session(get_engine()) as session:
+                yield session
 
     # ---------- Reads ----------
     def get(self, id: int, *, include_deleted: bool = False) -> Optional[ModelType]:
-        """Fetch by PK. If model has `deleted_at`, exclude soft-deleted unless include_deleted=True."""
-        with Session(get_engine()) as session:
+        with self._read_session() as session:
             obj = session.get(self.model, id)
             if obj is None:
                 return None
@@ -63,22 +95,19 @@ class ModelAccessor(Generic[ModelType]):
             return cast(ModelType, obj)
 
     def all(self, *, include_deleted: bool = False) -> List[ModelType]:
-        """List all. If model has `deleted_at`, exclude soft-deleted unless include_deleted=True."""
-        with Session(get_engine()) as session:
-            stmt = select(self.model)
+        with self._read_session() as session:
+            statement = select(self.model)
             if hasattr(self.model, "deleted_at") and not include_deleted:
-                stmt = stmt.where(getattr(self.model, "deleted_at").is_(None))
-            return cast(List[ModelType], session.exec(stmt).all())
+                statement = statement.where(getattr(self.model, "deleted_at").is_(None))
+            return cast(List[ModelType], session.exec(statement).all())
 
-    # ---------- Writes (atomic with audit) ----------
+    # ---------- Writes ----------
     def insert(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
-        with transaction() as session:
-            self._hooks.emit("before_insert", session=session, instance=obj)
-
+        def op(session: Session) -> ModelType:
+            self._emit("before_insert", session=session, instance=obj)
             session.add(obj)
             session.flush()
             session.refresh(obj)
-
             audit_operation(
                 session=session,
                 component=self.component,
@@ -88,29 +117,26 @@ class ModelAccessor(Generic[ModelType]):
                 before=None,
                 after=obj.model_dump(),
             )
-
-            self._hooks.emit("after_insert", session=session, instance=obj)
+            self._emit("after_insert", session=session, instance=obj)
             return obj
 
-    def save(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
-        """Create or update based on presence of `id` (upsert-by-id semantics)."""
-        obj_id = cast(Optional[int], getattr(obj, "id", None))
-        if obj_id is None:
-            return self.insert(obj, actor=actor)
+        return self._run_write(op)
 
-        with transaction() as session:
-            existing = session.get(self.model, obj_id)
-            if existing is None:
+    def save(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
+        def op(session: Session) -> ModelType:
+            obj_id = cast(Optional[int], getattr(obj, "id", None))
+            if obj_id is None:
                 return self.insert(obj, actor=actor)
 
-            before = existing.model_dump()
+            current = session.get(self.model, obj_id)
+            if current is None:
+                return self.insert(obj, actor=actor)
 
+            before = current.model_dump()
             merged = session.merge(obj)
-            self._hooks.emit("before_update", session=session, instance=merged)
-
+            self._emit("before_update", session=session, instance=merged)
             session.flush()
             session.refresh(merged)
-
             audit_operation(
                 session=session,
                 component=self.component,
@@ -120,51 +146,47 @@ class ModelAccessor(Generic[ModelType]):
                 before=before,
                 after=merged.model_dump(),
             )
-
-            self._hooks.emit("after_update", session=session, instance=merged)
+            self._emit("after_update", session=session, instance=merged)
             return cast(ModelType, merged)
+
+        return self._run_write(op)
 
     def upsert(self, obj: ModelType, *, actor: str = "internal") -> ModelType:
         return self.save(obj, actor=actor)
 
     def delete(self, id: int, *, actor: str = "internal") -> bool:
-        with transaction() as session:
+        def op(session: Session) -> bool:
             obj = session.get(self.model, id)
             if obj is None:
                 return False
-
-            self._hooks.emit("before_delete", session=session, instance=obj)
-
-            op, before_payload, after_payload = _soft_or_hard_delete(session, obj)
-
+            self._emit("before_delete", session=session, instance=obj)
+            op_name, before_payload, after_payload = _soft_or_hard_delete(session, obj)
             audit_operation(
                 session=session,
                 component=self.component,
-                operation=op,
+                operation=op_name,
                 record_id=id,
                 actor=actor,
                 before=before_payload,
                 after=after_payload,
             )
-
-            self._hooks.emit("after_delete", session=session, instance=obj)
+            self._emit("after_delete", session=session, instance=obj)
             return True
 
+        return self._run_write(op)
+
     def restore(self, id: int, *, actor: str = "internal") -> bool:
-        """If model has `deleted_at`, set it back to None and audit a 'restore'."""
-        with transaction() as session:
+        def op(session: Session) -> bool:
             obj = session.get(self.model, id)
             if obj is None or not hasattr(obj, "deleted_at"):
                 return False
             if getattr(obj, "deleted_at") is None:
-                return True  # already active
-
+                return True
             before = obj.model_dump()
             setattr(obj, "deleted_at", None)
             session.add(obj)
             session.flush()
             session.refresh(obj)
-
             audit_operation(
                 session=session,
                 component=self.component,
@@ -176,12 +198,16 @@ class ModelAccessor(Generic[ModelType]):
             )
             return True
 
+        return self._run_write(op)
+
     # ---------- Batch helpers ----------
-    def insert_many(self, objs: Sequence[ModelType], *, actor: str = "internal") -> List[ModelType]:
-        out: List[ModelType] = []
-        with transaction() as session:
+    def insert_many(
+        self, objs: Sequence[ModelType], *, actor: str = "internal"
+    ) -> List[ModelType]:
+        def op(session: Session) -> List[ModelType]:
+            out: List[ModelType] = []
             for obj in objs:
-                self._hooks.emit("before_insert", session=session, instance=obj)
+                self._emit("before_insert", session=session, instance=obj)
                 session.add(obj)
             session.flush()
             for obj in objs:
@@ -195,81 +221,43 @@ class ModelAccessor(Generic[ModelType]):
                     before=None,
                     after=obj.model_dump(),
                 )
-                self._hooks.emit("after_insert", session=session, instance=obj)
+                self._emit("after_insert", session=session, instance=obj)
                 out.append(obj)
-        return out
+            return out
+
+        return self._run_write(op)
 
     def delete_many(self, ids: Sequence[int], *, actor: str = "internal") -> int:
-        count = 0
-        with transaction() as session:
+        def op(session: Session) -> int:
+            count = 0
             for id_ in ids:
                 obj = session.get(self.model, id_)
                 if obj is None:
                     continue
-
-                self._hooks.emit("before_delete", session=session, instance=obj)
-
-                op, before_payload, after_payload = _soft_or_hard_delete(session, obj)
-
+                self._emit("before_delete", session=session, instance=obj)
+                op_name, before_payload, after_payload = _soft_or_hard_delete(
+                    session, obj
+                )
                 audit_operation(
                     session=session,
                     component=self.component,
-                    operation=op,
+                    operation=op_name,
                     record_id=id_,
                     actor=actor,
                     before=before_payload,
                     after=after_payload,
                 )
-
-                self._hooks.emit("after_delete", session=session, instance=obj)
+                self._emit("after_delete", session=session, instance=obj)
                 count += 1
-        return count
+            return count
 
-
-class BoundAccessor(Generic[ModelType]):
-    """
-    Session-bound view of a ModelAccessor for use INSIDE hooks or external
-    transaction blocks so you can reuse the same auditing/soft-delete logic
-    without opening a new transaction.
-    """
-
-    def __init__(self, model: Type[ModelType], component: str, session: Session) -> None:
-        self.model = model
-        self.component = component
-        self.session = session
-
-    def delete_many(self, ids: Sequence[int], *, actor: str = "internal") -> int:
-        count = 0
-        for id_ in ids:
-            obj = self.session.get(self.model, id_)
-            if obj is None:
-                continue
-
-            op, before_payload, after_payload = _soft_or_hard_delete(self.session, obj)
-
-            audit_operation(
-                session=self.session,
-                component=self.component,
-                operation=op,
-                record_id=id_,
-                actor=actor,
-                before=before_payload,
-                after=after_payload,
-            )
-            count += 1
-        return count
-
-    def delete(self, id: int, *, actor: str = "internal") -> bool:
-        return self.delete_many([id], actor=actor) == 1
+        return self._run_write(op)
 
 
 def _soft_or_hard_delete(
     session: Session, instance: SQLModel
 ) -> tuple[str, dict[str, Any], dict[str, Any] | None]:
-    """
-    Perform soft delete if the model defines `deleted_at`, otherwise hard delete.
-    Returns (operation, before_payload, after_payload).
-    """
+    """Soft delete if model defines `deleted_at`, else hard delete."""
     before_payload = instance.model_dump()
     if hasattr(instance, "deleted_at"):
         setattr(instance, "deleted_at", utcnow())

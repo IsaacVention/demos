@@ -6,7 +6,6 @@ from typing_extensions import Literal
 from sqlmodel import Session
 from storage.utils import ModelType
 
-# A hook gets the current Session and the instance being acted on
 HookFn = Callable[[Session, ModelType], None]
 HookEvent = Literal[
     "before_insert",
@@ -24,7 +23,9 @@ class HookRegistry(Generic[ModelType]):
     def __init__(self) -> None:
         self._hooks: DefaultDict[str, List[HookFn[ModelType]]] = defaultdict(list)
 
-    def decorator(self, event: HookEvent) -> Callable[[HookFn[ModelType]], HookFn[ModelType]]:
+    def decorator(
+        self, event: HookEvent
+    ) -> Callable[[HookFn[ModelType]], HookFn[ModelType]]:
         """Return a decorator that registers a function for `event`."""
 
         def deco(fn: HookFn[ModelType]) -> HookFn[ModelType]:

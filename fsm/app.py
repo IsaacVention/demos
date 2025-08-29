@@ -1,8 +1,7 @@
 import asyncio
-from state_machine.core import StateMachine
 from state_machine.defs import StateGroup, State, Trigger
-from state_machine.decorators import on_enter_state, auto_timeout
-from state_machine.core import BaseStates, BaseTriggers
+from state_machine.decorators import on_enter_state, auto_timeout, guard
+from state_machine.core import StateMachine, BaseStates, BaseTriggers
 
 
 # ---------- State , Trigger & Transition Declarations ----------
@@ -44,9 +43,9 @@ class CellFSM(StateMachine):
         kwargs.setdefault("transitions", TRANSITIONS)
         super().__init__(*args, **kwargs)
         self.simulate_failure = False
+        self.estop_status = False
         
     @on_enter_state(BaseStates.READY.value)
-    @auto_timeout(5.0, BaseTriggers.TO_FAULT.value)
     def enter_fault(self, _):
         print("🔴 entering ready")
 
@@ -70,6 +69,10 @@ class CellFSM(StateMachine):
     def enter_homing(self, _):
         print("🔵 entering homing")
         self._maybe_fail_or_continue(3, Triggers.finished_homing, States.running.homing)
+        
+    @guard(Triggers.start)
+    def is_system_safe(self):
+        return not self.estop_status
 
     def _maybe_fail_or_continue(self, delay, trigger_fn, expected_state):
         if self.simulate_failure:

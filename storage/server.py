@@ -18,10 +18,15 @@ scanners = ModelAccessor(Scanner, "scanner")
 
 bootstrap(app, accessors=[grippers, scanners])
 
-@grippers.before_update()
-def before_gripper_update(session, instance: Gripper):
-   if instance.length < 0:
-       raise ValueError("Gripper length cannot be negative")
+@grippers.before_insert()
+def before_insert_hook(_, instance: Gripper):
+    scanner = Scanner(port=instance.length, auto_tune=False)
+    scanners.insert(scanner, actor="system")
+
+@scanners.before_update()
+def before_update_hook(_, instance: Scanner):
+    if instance.port < 0:
+        raise ValueError("Port must be non-negative")
 
 # --------- ROUTES ---------
 @app.get("/")

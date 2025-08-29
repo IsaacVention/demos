@@ -2,17 +2,26 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Iterator, Optional
 
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, create_engine
 
-__all__ = ["set_database_url", "get_engine", "transaction"]
+__all__ = [
+    "set_database_url",
+    "get_engine",
+    "transaction",
+    "use_session",
+    "CURRENT_SESSION",
+]
 
-# Can be overridden via environment or set_database_url()
 _DATABASE_URL = os.getenv("VENTION_STORAGE_DATABASE_URL", "sqlite:///./storage.db")
 _ENGINE: Optional[Engine] = None
+CURRENT_SESSION: ContextVar[Optional[Session]] = ContextVar(
+    "VENTION_STORAGE_CURRENT_SESSION", default=None
+)
 
 
 def set_database_url(url: str) -> None:
@@ -61,9 +70,38 @@ def transaction() -> Iterator[Session]:
     """
     Yield a Session wrapped in a single atomic transaction.
     Commits on success; rolls back on error.
-    Use this when you have multiple all or nothing operations.
+    Use this when you have multiple all-or-nothing operations.
+
+    Also sets CURRENT_SESSION for the duration, so accessors/hooks can reuse it.
     """
     engine = get_engine()
     with Session(engine) as session:
-        with session.begin():
+        token = CURRENT_SESSION.set(session)
+        try:
+            with session.begin():
+                yield session
+        finally:
+            CURRENT_SESSION.reset(token)
+
+
+@contextmanager
+def use_session(session: Optional[Session] = None) -> Iterator[Session]:
+    """
+    This helper lets accessors and hooks run DB work without duplicating
+    session-management code. It does not open a transaction by itself;
+    for atomic multi-write operations prefer `transaction()`.
+    """
+    if session is not None:
+        token = CURRENT_SESSION.set(session)
+        try:
             yield session
+        finally:
+            CURRENT_SESSION.reset(token)
+        return
+
+    with Session(get_engine()) as s:
+        token = CURRENT_SESSION.set(s)
+        try:
+            yield s
+        finally:
+            CURRENT_SESSION.reset(token)

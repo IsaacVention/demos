@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from sqlalchemy import Column
 from sqlalchemy.dialects.sqlite import JSON
 from sqlmodel import Field, SQLModel, Session
 from storage.utils import utcnow
+from datetime import date
+import json
 
 __all__ = ["AuditLog", "audit_operation"]
 
@@ -26,6 +28,20 @@ class AuditLog(SQLModel, table=True):  # type: ignore[misc, call-arg]
     # Snapshot of state change
     before: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     after: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+
+
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    # add more cases as needed
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _jsonify(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    # round-trip through json to coerce unsupported types (e.g., datetime) into strings
+    return cast(Dict[str, Any], json.loads(json.dumps(value, default=_json_default)))
 
 
 def audit_operation(
@@ -48,7 +64,7 @@ def audit_operation(
             record_id=record_id,
             operation=operation,
             actor=actor,
-            before=before,
-            after=after,
+            before=_jsonify(before),
+            after=_jsonify(after),
         )
     )
