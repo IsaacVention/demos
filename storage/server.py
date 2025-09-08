@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from storage.accessor import ModelAccessor
-from storage.bootstrap import bootstrap
 
 from components.gripper.models import Gripper
 from components.scanner.models import Scanner
+
+from storage.accessor import ModelAccessor
+from storage.bootstrap import bootstrap
 
 
 # --------- BOOTSTRAP APP ---------
@@ -20,8 +21,8 @@ bootstrap(app, accessors=[grippers, scanners])
 
 @grippers.before_insert()
 def before_insert_hook(_, instance: Gripper):
-    scanner = Scanner(port=instance.length, auto_tune=False)
-    scanners.insert(scanner, actor="system")
+    if instance.length <= 0:
+        raise ValueError("Length must be positive")
 
 @scanners.before_update()
 def before_update_hook(_, instance: Scanner):

@@ -4,36 +4,47 @@
     <meta charset="UTF-8" />
     <title>Storage Demo</title>
     <style>
-      body {
-        font-family: sans-serif;
-        margin: 2em;
-      }
-      label,
-      input,
-      select {
-        margin: 0.3em;
-      }
-      table {
-        border-collapse: collapse;
-        margin-top: 1em;
-      }
-      th,
-      td {
-        border: 1px solid #ccc;
-        padding: 0.4em;
-      }
-      #auditLog {
-        margin-top: 2em;
-      }
-      .editInputs {
-        display: flex;
-        flex-direction: column;
-        gap: 0.3em;
-      }
+      body { font-family: sans-serif; margin: 2em; }
+      label, input, select { margin: 0.3em; }
+      table { border-collapse: collapse; margin-top: 1em; }
+      th, td { border: 1px solid #ccc; padding: 0.4em; vertical-align: top; }
+      #auditLog { margin-top: 2em; }
+      .editInputs { display: flex; flex-direction: column; gap: 0.3em; }
+      #diagramBox { margin-top: 2em; border: 1px solid #ddd; padding: 1em; border-radius: 6px; }
+      #diagramControls { display: flex; gap: 0.5em; align-items: center; margin-bottom: 0.75em; }
+      #diagramImg { max-width: 100%; height: auto; display: block; zoom: 2; }
+      .muted { color: #666; font-size: 0.9em; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+      #bodyBox { display: flex; gap: 2em; }
+
+      /* Soft-deleted row styles */
+      .soft-row { background: #f6f6f6; color: #777; }
+      .soft-row td { border-color: #e2e2e2; }
+      .soft-badge { display: inline-block; padding: 0.1em 0.4em; font-size: 0.8em; background: #eee; border: 1px solid #ddd; border-radius: 4px; margin-left: 0.4em; }
+      .soft-note { font-size: 0.85em; color: #777; margin-top: 0.25em; }
+      .hidden { display: none; }
     </style>
   </head>
   <body>
     <h1>Storage Demo</h1>
+    <div id="topControls">
+      <button id="exportBtn" onclick="downloadDatabase()">Export CSV (ZIP)</button>
+      <button id="backupBtn" onclick="backupSqlite()">Backup (.sqlite)</button>
+
+      <span id="restoreControls">
+        <input id="restoreFile" type="file" accept=".sqlite,application/octet-stream,application/x-sqlite3" />
+        <span id="restoreFlags">
+          <label title="Validate only; do not replace current DB">
+            <input id="restoreDryRun" type="checkbox" /> Validate only
+          </label>
+          <label title="Run PRAGMA integrity_check on upload before restore">
+            <input id="restoreIntegrity" type="checkbox" checked /> Integrity check
+          </label>
+        </span>
+        <button id="validateBtn" onclick="restoreSqlite(true)">Validate</button>
+        <button id="restoreBtn" onclick="restoreSqlite(false)">Restore</button>
+      </span>
+    </div>
 
     <div id="userPrompt">
       <label>Your Name: <input id="usernameInput" /></label>
@@ -43,7 +54,7 @@
     <div id="mainUI" style="display: none">
       <label>
         Select Component:
-        <select id="componentSelect" onchange="loadRecords()">
+        <select id="componentSelect" onchange="onComponentChange()">
           <option value="gripper">Gripper</option>
           <option value="scanner">Scanner</option>
         </select>
@@ -62,19 +73,33 @@
         <tbody></tbody>
       </table>
 
-      <h2>Last 10 Audit Entries</h2>
-      <table id="auditLog">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>User</th>
-            <th>Operation</th>
-            <th>Component</th>
-            <th>Diff</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div id="bodyBox">
+        <div>
+          <h2 id="auditHeader">Last 3 Audit Entries</h2>
+          <table id="auditLog">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>User</th>
+                <th>Operation</th>
+                <th>Component</th>
+                <th>Diff</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div id="diagramBox">
+          <div id="diagramControls">
+            <h2 style="margin: 0">Database Diagram</h2>
+            <span id="diagramStatus" class="muted"></span>
+          </div>
+          <div id="diagramContainer">
+            <img id="diagramImg" alt="Database diagram"/>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
@@ -84,6 +109,133 @@
         document.getElementById("userPrompt").style.display = "none";
         loadRecords();
         loadAudit();
+        loadDiagram();
+      }
+      async function backupSqlite() {
+        const btn = document.getElementById("backupBtn");
+        const original = btn ? btn.textContent : null;
+        try {
+          if (btn) { btn.textContent = "Backing up…"; btn.disabled = true; }
+          const res = await fetch("/db/backup.sqlite", { cache: "no-store" });
+          if (!res.ok) {
+            const msg = await safeText(res);
+            alert(`Backup failed: ${msg || `Status ${res.status}`}`);
+            return;
+          }
+          await downloadFromResponse(res, "backup.sqlite");
+        } catch (err) {
+          console.error(err);
+          alert("Backup failed due to a network or client error.");
+        } finally {
+          if (btn) { btn.textContent = original; btn.disabled = false; }
+        }
+      }
+
+      async function restoreSqlite(dryRun) {
+        const fileInput = document.getElementById("restoreFile");
+        const btn = dryRun ? document.getElementById("validateBtn") : document.getElementById("restoreBtn");
+        const original = btn ? btn.textContent : null;
+        const integrity = document.getElementById("restoreIntegrity").checked;
+        const dryFlag = dryRun || document.getElementById("restoreDryRun").checked;
+
+        if (!fileInput.files || fileInput.files.length === 0) {
+          alert("Please choose a .sqlite file to restore.");
+          return;
+        }
+
+        const form = new FormData();
+        form.append("file", fileInput.files[0]);
+
+        const qs = new URLSearchParams({
+          integrity_check: String(integrity),
+          dry_run: String(dryFlag),
+        });
+
+        try {
+          if (btn) { btn.textContent = dryFlag ? "Validating…" : "Restoring…"; btn.disabled = true; }
+          const res = await fetch(`/db/restore?${qs.toString()}`, {
+            method: "POST",
+            body: form,
+          });
+          const msgText = await safeText(res);
+
+          if (!res.ok) {
+            let detail = "";
+            try { detail = JSON.parse(msgText).detail; } catch { detail = msgText; }
+            alert(`Restore failed: ${detail || `Status ${res.status}`}`);
+            return;
+          }
+
+          // Success payload: {status:"ok", restored:bool, bytes:int}
+          let payload = {};
+          try { payload = JSON.parse(msgText); } catch (_) {}
+          const restored = payload.restored ? "Restored" : "Validated";
+          alert(`${restored} successfully (${payload.bytes ?? 0} bytes).`);
+
+          // If we actually restored, refresh visible data so UI matches new DB
+          if (payload.restored) {
+            await loadRecords();
+            await loadAudit();
+            await loadDiagram();
+          }
+        } catch (err) {
+          console.error(err);
+          alert("Restore failed due to a network or client error.");
+        } finally {
+          if (btn) { btn.textContent = original; btn.disabled = false; }
+        }
+      }
+
+      async function downloadFromResponse(res, defaultName) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const cd = res.headers.get("content-disposition") || "";
+        const m = cd.match(/filename="([^"]+)"/i);
+        const filename = (m && m[1]) ? m[1] : defaultName;
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      async function downloadDatabase() {
+        const btn = document.getElementById("exportBtn");
+        const original = btn ? btn.textContent : null;
+        try {
+          if (btn) { btn.textContent = "Preparing…"; btn.disabled = true; }
+    
+          const res = await fetch("/db/export.zip", { cache: "no-store" });
+          if (!res.ok) {
+            const msg = await safeText(res);
+            const friendly = msg || `Status ${res.status}`;
+            alert(`Export failed: ${friendly}`);
+            return;
+          }
+    
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+    
+          // respect server-provided filename if present
+          const cd = res.headers.get("content-disposition") || "";
+          const m = cd.match(/filename="([^"]+)"/i);
+          const filename = (m && m[1]) ? m[1] : "export.zip";
+    
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error(err);
+          alert("Export failed due to a network or client error.");
+        } finally {
+          if (btn) { btn.textContent = original; btn.disabled = false; }
+        }
       }
 
       function setUsername() {
@@ -101,9 +253,19 @@
         };
       }
 
+      function currentComponent() {
+        return document.getElementById("componentSelect").value;
+      }
+
+      function onComponentChange() {
+        loadRecords();
+        loadAudit();
+      }
+
       async function loadRecords() {
-        const comp = document.getElementById("componentSelect").value;
-        const res = await fetch(`/${comp}/`);
+        const comp = currentComponent();
+        // include_deleted=true so soft-deleted rows appear and can be restored
+        const res = await fetch(`/${comp}/?include_deleted=true`);
         const records = await res.json();
 
         // Build creation form dynamically
@@ -127,27 +289,30 @@
         const tbody = document.querySelector("#recordsTable tbody");
         tbody.innerHTML = "";
         for (const r of records) {
+          const isSoftDeleted = r.hasOwnProperty("deleted_at") && r.deleted_at !== null;
+
+          // Render editable fields only if NOT soft-deleted
           let editFields = "";
-          if (comp === "gripper") {
-            editFields = `
-              <div class="editInputs">
-                <label>Length: <input id="edit_length_${r.id}" type="number" value="${r.length}" step="0.01"></label>
-                <label>Width: <input id="edit_width_${r.id}" type="number" value="${r.width}" step="0.01"></label>
-                <button onclick="saveEdit(${r.id})">Save</button>
-              </div>
-            `;
-          } else if (comp === "scanner") {
-            editFields = `
-              <div class="editInputs">
-                <label>Port: <input id="edit_port_${
-                  r.id
-                }" type="number" value="${r.port}"></label>
-                <label>Auto Tune: <input id="edit_autoTune_${
-                  r.id
-                }" type="checkbox" ${r.auto_tune ? "checked" : ""}></label>
-                <button onclick="saveEdit(${r.id})">Save</button>
-              </div>
-            `;
+          if (!isSoftDeleted) {
+            if (comp === "gripper") {
+              editFields = `
+                <div class="editInputs">
+                  <label>Length: <input id="edit_length_${r.id}" type="number" value="${r.length}" step="0.01"></label>
+                  <label>Width: <input id="edit_width_${r.id}" type="number" value="${r.width}" step="0.01"></label>
+                  <button onclick="saveEdit(${r.id})">Save</button>
+                </div>
+              `;
+            } else if (comp === "scanner") {
+              editFields = `
+                <div class="editInputs">
+                  <label>Port: <input id="edit_port_${r.id}" type="number" value="${r.port}"></label>
+                  <label>Auto Tune: <input id="edit_autoTune_${r.id}" type="checkbox" ${r.auto_tune ? "checked" : ""}></label>
+                  <button onclick="saveEdit(${r.id})">Save</button>
+                </div>
+              `;
+            }
+          } else {
+            editFields = `<div class="soft-note">This record is soft-deleted.</div>`;
           }
 
           const fields = Object.entries(r)
@@ -155,23 +320,23 @@
             .map(([k, v]) => `${k}: ${v}`)
             .join(", ");
 
-          tbody.innerHTML += `
-            <tr>
-              <td>${r.id}</td>
-              <td>${fields}<br>${editFields}</td>
-              <td>
-                  <button onclick="deleteRecord(${r.id})">Delete</button>
-                  ${
-                    comp === "gripper" ? `<button onclick="alertCOM(${r.id})">COM</button>` : ""
-                  }
-              </td>
+          // Actions: Delete for active rows; Restore for soft-deleted rows.
+          const actions = !isSoftDeleted
+            ? `<button onclick="deleteRecord(${r.id})">Delete</button>
+               ${comp === "gripper" ? `<button onclick="alertCOM(${r.id})">COM</button>` : ""}`
+            : `<button onclick="restoreRecord(${r.id})">Restore</button>`;
 
+          tbody.innerHTML += `
+            <tr class="${isSoftDeleted ? "soft-row" : ""}">
+              <td>${r.id} ${isSoftDeleted ? `<span class="soft-badge">deleted</span>` : ""}</td>
+              <td>${fields}<br>${editFields}</td>
+              <td>${actions}</td>
             </tr>`;
         }
       }
 
       async function createRecord() {
-        const comp = document.getElementById("componentSelect").value;
+        const comp = currentComponent();
         let payload = {};
         if (comp === "gripper") {
           payload = {
@@ -184,15 +349,23 @@
             auto_tune: document.getElementById("autoTune").checked,
           };
         }
-        console.log(payload);
         const res = await fetch(`/${comp}/`, {
           method: "POST",
           headers: getHeaders(),
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          alert("Error creating record");
-        }
+        if (!res.ok) alert("Error creating record");
+        await loadRecords();
+        await loadAudit();
+      }
+
+      async function restoreRecord(id) {
+        const comp = currentComponent();
+        const res = await fetch(`/${comp}/${id}/restore`, {
+          method: "POST",
+          headers: getHeaders(),
+        });
+        if (!res.ok) alert("Error restoring record");
         await loadRecords();
         await loadAudit();
       }
@@ -211,16 +384,12 @@
       }
 
       async function saveEdit(id) {
-        const comp = document.getElementById("componentSelect").value;
+        const comp = currentComponent();
         let payload = {};
         if (comp === "gripper") {
           payload = {
-            length: parseFloat(
-              document.getElementById(`edit_length_${id}`).value
-            ),
-            width: parseFloat(
-              document.getElementById(`edit_width_${id}`).value
-            ),
+            length: parseFloat(document.getElementById(`edit_length_${id}`).value),
+            width: parseFloat(document.getElementById(`edit_width_${id}`).value),
           };
         } else if (comp === "scanner") {
           payload = {
@@ -233,15 +402,13 @@
           headers: getHeaders(),
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          alert("Error updating record");
-        }
+        if (!res.ok) alert("Error updating record");
         await loadRecords();
         await loadAudit();
       }
 
       async function deleteRecord(id) {
-        const comp = document.getElementById("componentSelect").value;
+        const comp = currentComponent();
         await fetch(`/${comp}/${id}`, {
           method: "DELETE",
           headers: getHeaders(),
@@ -251,21 +418,62 @@
       }
 
       async function loadAudit() {
-        const res = await fetch("/audit");
+        const comp = currentComponent();
+        document.getElementById("auditHeader").textContent = `Last 3 Audit Entries — ${comp}`;
+      
+        const res = await fetch(`/db/audit?component=${encodeURIComponent(comp)}&limit=3`);
+        if (!res.ok) {
+          console.warn("audit endpoint not available");
+          return;
+        }
         const entries = await res.json();
         const tbody = document.querySelector("#auditLog tbody");
         tbody.innerHTML = "";
-        console.log(entries);
         for (const e of entries) {
+          let diff;
+          if (!e.before && e.after) diff = e.after;
+          else if (e.before || e.after) diff = { before: e.before, after: e.after };
+          else diff = null;
+      
           tbody.innerHTML += `
             <tr>
               <td>${new Date(e.timestamp).toLocaleString()}</td>
-              <td>${e.user}</td>
+              <td>${e.actor ?? e.user ?? ""}</td>
               <td>${e.operation}</td>
               <td>${e.component}</td>
-              <td><pre>${JSON.stringify(e.diff, null, 1)}</pre></td>
+              <td><pre>${JSON.stringify(diff, null, 1)}</pre></td>
             </tr>`;
         }
+      }
+      
+
+      async function loadDiagram() {
+        const status = document.getElementById("diagramStatus");
+        const img = document.getElementById("diagramImg");
+        status.textContent = "Loading…";
+        img.src = "";
+        try {
+          const res = await fetch("/db/diagram.svg", { cache: "no-store" });
+          if (!res.ok) {
+            const msg = await safeText(res);
+            if (res.status === 503) status.textContent = "Diagram unavailable (Graphviz not installed).";
+            else status.textContent = "Failed to load diagram.";
+            console.warn("diagram.svg error:", res.status, msg);
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          img.onload = () => { URL.revokeObjectURL(url); status.textContent = ""; };
+          img.onerror = () => { status.textContent = "Diagram failed to render."; };
+          img.src = url;
+        } catch (err) {
+          console.error(err);
+          status.textContent = "Error fetching diagram.";
+        }
+      }
+
+      async function safeText(res) {
+        try { return await res.text(); } catch { return ""; }
       }
     </script>
   </body>
