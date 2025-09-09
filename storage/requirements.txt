@@ -3,3 +3,4 @@ fastapi
 uvicorn
 sqlalchemy_schemadisplay
 python-multipart
+vention-storage
