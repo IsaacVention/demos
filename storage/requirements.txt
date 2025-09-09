@@ -3,4 +3,4 @@ fastapi
 uvicorn
 sqlalchemy_schemadisplay
 python-multipart
-vention-storage == 0.0.0
+vention-storage
