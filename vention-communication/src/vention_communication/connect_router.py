@@ -15,6 +15,28 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+class StreamManager:
+    """Manages subscribers for a single stream (multi-client broadcast)."""
+
+    def __init__(self):
+        self.subscribers: set[asyncio.Queue] = set()
+
+    def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self.subscribers.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue):
+        self.subscribers.discard(q)
+
+    async def publish(self, data: Any):
+        # non-blocking broadcast
+        for q in list(self.subscribers):
+            try:
+                q.put_nowait(data)
+            except asyncio.QueueFull:
+                pass
+
 
 class ConnectRouter(APIRouter):
     """
@@ -69,47 +91,28 @@ class ConnectRouter(APIRouter):
         rpc_name = name[0].upper() + name[1:]
         route_path = f"/vention.app.v1.VentionAppService/{rpc_name}"
 
+        manager = StreamManager()  # shared publisher per stream
+        self.stream_handlers[name] = manager  # store for publisher access
+
         @self.post(route_path)
         async def stream_endpoint(request: Request):
-            """
-            Each subscriber opens a new HTTP connection that remains open.
-            The handler publishes messages to an asyncio.Queue shared by this client.
-            """
-            q: asyncio.Queue = asyncio.Queue()
-            loop = asyncio.get_event_loop()
+            """Each subscriber opens a connection and receives published messages."""
+            q = manager.subscribe()
 
             async def event_generator():
-                while True:
-                    msg = await q.get()
-                    if isinstance(msg, BaseModel):
-                        msg = msg.model_dump()
-                    frame = {"value": msg} if not isinstance(msg, (dict, list)) else msg
-
-                    # Encode as Connect envelope
-                    payload = json.dumps(frame).encode("utf-8")
-                    # 1 byte flag (0 for data), 4 bytes length prefix (big-endian)
-                    header = b"\x00" + struct.pack(">I", len(payload))
-                    yield header + payload
-
-
-
-            # Spawn background task to populate queue
-            async def run_handler():
                 try:
                     while True:
-                        data = await handler()
-                        await q.put(data)
-                        await asyncio.sleep(1)  # throttle demo streams
-                except asyncio.CancelledError:
-                    pass
+                        msg = await q.get()
+                        if isinstance(msg, BaseModel):
+                            msg = msg.model_dump()
+                        frame = {"value": msg} if not isinstance(msg, (dict, list)) else msg
 
-            task = loop.create_task(run_handler())
+                        payload = json.dumps(frame).encode("utf-8")
+                        header = b"\x00" + struct.pack(">I", len(payload))
+                        yield header + payload
+                finally:
+                    manager.unsubscribe(q)
 
-            # Ensure cleanup on disconnect
-            async def on_disconnect():
-                task.cancel()
-
-            request.scope["on_disconnect"] = on_disconnect
             return StreamingResponse(
                 event_generator(),
                 media_type="application/connect+json",

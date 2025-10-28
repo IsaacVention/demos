@@ -1,0 +1,10 @@
+version: v2
+plugins:
+
+  # --- Python (backend / peer apps) ---
+  - remote: buf.build/protocolbuffers/python
+    out: gen/python
+  - remote: buf.build/protocolbuffers/pyi
+    out: gen/python
+  - local: protoc-gen-connect_python
+    out: gen/python

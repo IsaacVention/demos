@@ -41,25 +41,26 @@ def action(name: Optional[str] = None):
 def stream(name: str, payload: Type[Any]):
     """
     Decorator for defining a server-streaming RPC.
-    `payload` is the message type streamed to the client.
-    The decorated function is the publisher (you call it to produce values).
+    The wrapped function acts as the *publisher*.
     """
-
     def decorator(fn: Callable[..., Awaitable[Any]]):
-        handler = fn
+        entry = StreamEntry(name=name, payload=payload, handler=fn, publisher=None)
+        _streams[name] = entry
 
         async def publisher(*args: Any, **kwargs: Any):
-            result = await handler(*args, **kwargs)
+            result = await fn(*args, **kwargs)
+            from .app import _GLOBAL_APP  # reference injected below
+            router = _GLOBAL_APP.connect_router
+            manager = router.stream_handlers.get(name)
+            if manager:
+                await manager.publish(result)
             return result
 
-        entry = StreamEntry(
-            name=name, payload=payload, handler=handler, publisher=publisher
-        )
-
-        _streams[name] = entry
+        entry.publisher = publisher
         return publisher
 
     return decorator
+
 
 
 def _get_registered_actions() -> dict[str, ActionEntry]:
