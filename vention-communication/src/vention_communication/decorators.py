@@ -47,7 +47,6 @@ def stream(
     *,
     payload: Type[Any],
     replay: bool = True,
-    write_timeout: Optional[float] = None,
     queue_maxsize: int = 1,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
@@ -66,7 +65,6 @@ def stream(
             func=None,  # filled by wrapper
             payload_type=payload,
             replay=replay,
-            write_timeout=write_timeout,
             queue_maxsize=queue_maxsize,
         )
         _streams.append(entry)

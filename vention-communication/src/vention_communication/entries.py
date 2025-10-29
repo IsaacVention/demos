@@ -20,7 +20,6 @@ class StreamEntry:
     payload_type: Type[Any]
     # --- New, configurable behavior ---
     replay: bool = True  # enqueue last_value on new subscriber
-    write_timeout: Optional[float] = None  # seconds without a successful send → drop
     queue_maxsize: int = 1  # per-subscriber buffer; 1 = latest-wins
 
 

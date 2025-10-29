@@ -27,7 +27,7 @@ def _frame(payload: Dict[str, Any], *, trailer: bool = False) -> bytes:
     return header + body
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False, unsafe_hash=True)
 class _Subscriber:
     queue: asyncio.Queue
     joined_at: float = field(default_factory=lambda: time.time())
@@ -174,23 +174,12 @@ class ConnectRouter:
         path = f"/{service_fqn}/{entry.name}"
 
         async def _stream_iter(sub: _Subscriber) -> Any:
-            write_timeout = entry.write_timeout
-            last_send = time.time()
-
             try:
                 while True:
-                    # Wait forever for a message (no heartbeats)
                     item = await sub.queue.get()
                     payload = _serialize_stream_item(item)
-                    last_send = time.time()
                     yield _frame(payload, trailer=False)
 
-                    # Optional write-timeout: if too long since last successful send
-                    if (
-                        write_timeout is not None
-                        and (time.time() - last_send) > write_timeout
-                    ):
-                        raise TimeoutError(f"write timeout after {write_timeout}s")
             except Exception as e:
                 trailer = error_envelope(to_connect_error(e))
                 yield _frame(trailer, trailer=True)
