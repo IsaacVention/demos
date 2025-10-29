@@ -28,9 +28,9 @@ class VentionAppServiceASGIApplication(ConnectASGIApplication):
     def __init__(self, service: VentionAppService, *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
-                "/vention.app.v1.VentionAppService/Ping": Endpoint.unary(
+                "/vention.app.v1.VentionAppService/ping": Endpoint.unary(
                     method=MethodInfo(
-                        name="Ping",
+                        name="ping",
                         service_name="vention.app.v1.VentionAppService",
                         input=proto_dot_app__pb2.PingRequest,
                         output=proto_dot_app__pb2.PingResponse,
@@ -38,9 +38,9 @@ class VentionAppServiceASGIApplication(ConnectASGIApplication):
                     ),
                     function=service.ping,
                 ),
-                "/vention.app.v1.VentionAppService/Heartbeat": Endpoint.server_stream(
+                "/vention.app.v1.VentionAppService/heartbeat": Endpoint.server_stream(
                     method=MethodInfo(
-                        name="Heartbeat",
+                        name="heartbeat",
                         service_name="vention.app.v1.VentionAppService",
                         input=google_dot_protobuf_dot_empty__pb2.Empty,
                         output=proto_dot_app__pb2.HeartbeatMessage,
@@ -70,7 +70,7 @@ class VentionAppServiceClient(ConnectClient):
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="Ping",
+                name="ping",
                 service_name="vention.app.v1.VentionAppService",
                 input=proto_dot_app__pb2.PingRequest,
                 output=proto_dot_app__pb2.PingResponse,
@@ -90,7 +90,7 @@ class VentionAppServiceClient(ConnectClient):
         return self.execute_server_stream(
             request=request,
             method=MethodInfo(
-                name="Heartbeat",
+                name="heartbeat",
                 service_name="vention.app.v1.VentionAppService",
                 input=google_dot_protobuf_dot_empty__pb2.Empty,
                 output=proto_dot_app__pb2.HeartbeatMessage,
@@ -112,9 +112,9 @@ class VentionAppServiceWSGIApplication(ConnectWSGIApplication):
     def __init__(self, service: VentionAppServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None) -> None:
         super().__init__(
             endpoints={
-                "/vention.app.v1.VentionAppService/Ping": EndpointSync.unary(
+                "/vention.app.v1.VentionAppService/ping": EndpointSync.unary(
                     method=MethodInfo(
-                        name="Ping",
+                        name="ping",
                         service_name="vention.app.v1.VentionAppService",
                         input=proto_dot_app__pb2.PingRequest,
                         output=proto_dot_app__pb2.PingResponse,
@@ -122,9 +122,9 @@ class VentionAppServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.ping,
                 ),
-                "/vention.app.v1.VentionAppService/Heartbeat": EndpointSync.server_stream(
+                "/vention.app.v1.VentionAppService/heartbeat": EndpointSync.server_stream(
                     method=MethodInfo(
-                        name="Heartbeat",
+                        name="heartbeat",
                         service_name="vention.app.v1.VentionAppService",
                         input=google_dot_protobuf_dot_empty__pb2.Empty,
                         output=proto_dot_app__pb2.HeartbeatMessage,
@@ -154,7 +154,7 @@ class VentionAppServiceClientSync(ConnectClientSync):
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="Ping",
+                name="ping",
                 service_name="vention.app.v1.VentionAppService",
                 input=proto_dot_app__pb2.PingRequest,
                 output=proto_dot_app__pb2.PingResponse,
@@ -174,7 +174,7 @@ class VentionAppServiceClientSync(ConnectClientSync):
         return self.execute_server_stream(
             request=request,
             method=MethodInfo(
-                name="Heartbeat",
+                name="heartbeat",
                 service_name="vention.app.v1.VentionAppService",
                 input=google_dot_protobuf_dot_empty__pb2.Empty,
                 output=proto_dot_app__pb2.HeartbeatMessage,

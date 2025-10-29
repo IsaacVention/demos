@@ -1,76 +1,94 @@
-# src/vention_communication/decorators.py
+# decorators.py
 
-"""
-Decorators for defining RPC endpoints in Vention Communication.
+from __future__ import annotations
+from typing import Any, Callable, Optional, Type, Dict, List
 
-@action() — unary RPC (request → response)
-@stream(name, payload=…) — server-streaming RPC
-"""
+from fastapi import utils
+from pydantic import BaseModel
+from google.protobuf.empty_pb2 import Empty as _Empty  # type: ignore
 
-from typing import Any, Awaitable, Callable, Type, Optional, get_type_hints
 from .entries import ActionEntry, StreamEntry
-from .utils.typing_utils import get_input_type, get_return_type, Empty
+from .typing_utils import infer_input_type, infer_output_type, is_pydantic_model
 
-# Module-level registries for definitions made outside of VentionApp
-_actions: dict[str, ActionEntry] = {}
-_streams: dict[str, StreamEntry] = {}
+# Global registries populated by decorators (kept for compatibility)
+_actions: List[ActionEntry] = []
+_streams: List[StreamEntry] = []
+
+# Set by VentionApp.finalize()
+_GLOBAL_APP = None  # type: ignore
 
 
-def action(name: Optional[str] = None):
-    """
-    Decorator for defining a unary RPC endpoint.
-    Infers input_type and output_type from the function signature.
-    """
+def set_global_app(app: Any) -> None:
+    global _GLOBAL_APP
+    _GLOBAL_APP = app
 
-    def decorator(fn: Callable[..., Awaitable[Any]]):
-        rpc_name = name or fn.__name__
 
-        input_type = get_input_type(fn)
-        output_type = get_return_type(fn)
+# ----------------- Actions (unary) -----------------
 
-        entry = ActionEntry(
-            name=rpc_name, fn=fn, input_type=input_type, output_type=output_type
-        )
 
-        _actions[rpc_name] = entry
+def action(
+    name: Optional[str] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        in_t = infer_input_type(fn)  # None → Empty
+        out_t = infer_output_type(fn)  # None → Empty
+        entry = ActionEntry(name or fn.__name__, fn, in_t, out_t)
+        _actions.append(entry)
         return fn
 
     return decorator
 
 
-def stream(name: str, payload: Type[Any]):
-    """
-    Decorator for defining a server-streaming RPC.
-    The wrapped function acts as the *publisher*.
-    """
-    def decorator(fn: Callable[..., Awaitable[Any]]):
-        entry = StreamEntry(name=name, payload=payload, handler=fn, publisher=None)
-        _streams[name] = entry
+# ----------------- Streams (server broadcast) -----------------
 
-        async def publisher(*args: Any, **kwargs: Any):
+
+def stream(
+    name: str,
+    *,
+    payload: Type[Any],
+    replay: bool = True,
+    write_timeout: Optional[float] = None,
+    queue_maxsize: int = 1,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """
+    Register a server-broadcast stream. The decorated function becomes a PUBLISHER:
+    - When you call it, we await your function, then publish its return value to the stream.
+    """
+    if not (is_pydantic_model(payload) or payload in (int, float, str, bool, dict)):
+        # keep scalar+model coverage for now
+        raise ValueError(
+            "payload must be a pydantic BaseModel or a JSON-serializable scalar/dict"
+        )
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        entry = StreamEntry(
+            name=name,
+            func=None,  # filled by wrapper
+            payload_type=payload,
+            replay=replay,
+            write_timeout=write_timeout,
+            queue_maxsize=queue_maxsize,
+        )
+        _streams.append(entry)
+
+        async def publisher_wrapper(*args: Any, **kwargs: Any) -> Any:
+            if _GLOBAL_APP is None or _GLOBAL_APP.connect_router is None:
+                raise RuntimeError("Stream publish called before app.finalize()")
             result = await fn(*args, **kwargs)
-            from .app import _GLOBAL_APP  # reference injected below
-            router = _GLOBAL_APP.connect_router
-            manager = router.stream_handlers.get(name)
-            if manager:
-                await manager.publish(result)
-            return result
+            # Publish into the manager (latest-wins distribution)
+            _GLOBAL_APP.connect_router.publish(name, result)
+            return None
 
-        entry.publisher = publisher
-        return publisher
+        entry.func = publisher_wrapper  # type: ignore
+        return publisher_wrapper
 
     return decorator
 
 
-
-def _get_registered_actions() -> dict[str, ActionEntry]:
-    """Internal: get the module-level action entries."""
-    return dict(_actions)
+# --------------- Export for app/codegen ----------------
 
 
-def _get_registered_streams() -> dict[str, StreamEntry]:
-    """Internal: get the module-level stream entries."""
-    return dict(_streams)
+def collect_bundle():
+    from .entries import RpcBundle
 
-
-__all__ = ["action", "stream", "_get_registered_actions", "_get_registered_streams"]
+    return RpcBundle(actions=list(_actions), streams=list(_streams))

@@ -3,10 +3,6 @@ package vention.app.v1;
 
 import "google/protobuf/empty.proto";
 
-message HeartbeatMessage {
-  string value = 1;
-  int64 timestamp = 2;
-}
 
 message PingRequest {
   string message = 1;
@@ -16,7 +12,12 @@ message PingResponse {
   string message = 1;
 }
 
+message HeartbeatMessage {
+  string value = 1;
+  int64 timestamp = 2;
+}
+
 service VentionAppService {
-  rpc Ping(PingRequest) returns (PingResponse);
-  rpc Heartbeat(google.protobuf.Empty) returns (stream HeartbeatMessage);
+  rpc ping (PingRequest) returns (PingResponse);
+  rpc heartbeat (google.protobuf.Empty) returns (stream HeartbeatMessage);
 }

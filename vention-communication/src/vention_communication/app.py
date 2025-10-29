@@ -1,44 +1,63 @@
+# app.py
+
+from __future__ import annotations
+
 from fastapi import FastAPI
+
 from .connect_router import ConnectRouter
-from .entries import RpcBundle, ActionEntry, StreamEntry
-from .decorators import _get_registered_actions, _get_registered_streams
+from .decorators import collect_bundle, set_global_app
+from .codegen import generate_proto
+
 
 class VentionApp(FastAPI):
     """
-    Wrapper around FastAPI providing decorator-based RPC registration
-    and automatic proto emission.
+    FastAPI app that registers Connect-style RPCs and streams from decorators.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        name: str = "VentionApp",
+        *,
+        emit_proto: bool = False,
+        proto_path: str = "proto/app.proto",
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        _GLOBAL_APP = None
-        self.actions: dict[str, ActionEntry] = {}
-        self.streams: dict[str, StreamEntry] = {}
+        self.name = name
+        self.emit_proto = emit_proto
+        self.proto_path = proto_path
         self.connect_router = ConnectRouter()
-        self._finalized = False
 
-    def extend(self, bundle: RpcBundle):
-        self.actions.update(bundle.actions)
-        self.streams.update(bundle.streams)
+    def finalize(self) -> None:
+        # Collect declared RPCs/streams
+        bundle = collect_bundle()
+        service_fqn = f"vention.app.v1.{self.service_name}Service"
 
-    def finalize(self, *, emit_proto=True, out_dir="proto/"):
-        global _GLOBAL_APP
-        _GLOBAL_APP = self
-        if self._finalized:
-            return
-        self.actions = _get_registered_actions()
-        self.streams = _get_registered_streams()
-        
-        # Register ConnectRPC routes
-        for name, entry in self.actions.items():
-            self.connect_router.add_unary(
-                name, entry.fn, entry.input_type, entry.output_type
-            )
-        for name, entry in self.streams.items():
-            self.connect_router.add_stream(name, entry.handler, entry.payload)
-        self.include_router(self.connect_router, prefix="/rpc")
+        # Register
+        for a in bundle.actions:
+            self.connect_router.add_unary(a, service_fqn)
+        for s in bundle.streams:
+            # create topic (async init happens on first subscribe/post)
+            self.connect_router.add_stream(s, service_fqn)
 
-        if emit_proto:
-            from .codegen import emit_proto
-            emit_proto(self.actions, self.streams, out_dir)
-        self._finalized = True
+        # Mount router
+        self.include_router(self.connect_router.router, prefix="/rpc")
+
+        # Emit proto if asked
+        if self.emit_proto:
+            proto = generate_proto(self.service_name)
+            import os
+
+            os.makedirs(os.path.dirname(self.proto_path), exist_ok=True)
+            with open(self.proto_path, "w", encoding="utf-8") as f:
+                f.write(proto)
+
+        # Make available to publisher wrappers
+        set_global_app(self)
+
+    # Service name derived from app name
+    @property
+    def service_name(self) -> str:
+        from .codegen import sanitize_service_name
+
+        return sanitize_service_name(self.name)

@@ -25,19 +25,19 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fproto/app.proto\x12\x0evention.app.v1\x1a\x1bgoogle/protobuf/empty.proto\"F\n\x10HeartbeatMessage\x12\x14\n\x05value\x18\x01 \x01(\tR\x05value\x12\x1c\n\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\"\'\n\x0bPingRequest\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\"(\n\x0cPingResponse\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message2\x9f\x01\n\x11VentionAppService\x12\x41\n\x04Ping\x12\x1b.vention.app.v1.PingRequest\x1a\x1c.vention.app.v1.PingResponse\x12G\n\tHeartbeat\x12\x16.google.protobuf.Empty\x1a .vention.app.v1.HeartbeatMessage0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fproto/app.proto\x12\x0evention.app.v1\x1a\x1bgoogle/protobuf/empty.proto\"\'\n\x0bPingRequest\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\"(\n\x0cPingResponse\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\"F\n\x10HeartbeatMessage\x12\x14\n\x05value\x18\x01 \x01(\tR\x05value\x12\x1c\n\ttimestamp\x18\x02 \x01(\x03R\ttimestamp2\x9f\x01\n\x11VentionAppService\x12\x41\n\x04ping\x12\x1b.vention.app.v1.PingRequest\x1a\x1c.vention.app.v1.PingResponse\x12G\n\theartbeat\x12\x16.google.protobuf.Empty\x1a .vention.app.v1.HeartbeatMessage0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'proto.app_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_HEARTBEATMESSAGE']._serialized_start=64
-  _globals['_HEARTBEATMESSAGE']._serialized_end=134
-  _globals['_PINGREQUEST']._serialized_start=136
-  _globals['_PINGREQUEST']._serialized_end=175
-  _globals['_PINGRESPONSE']._serialized_start=177
-  _globals['_PINGRESPONSE']._serialized_end=217
+  _globals['_PINGREQUEST']._serialized_start=64
+  _globals['_PINGREQUEST']._serialized_end=103
+  _globals['_PINGRESPONSE']._serialized_start=105
+  _globals['_PINGRESPONSE']._serialized_end=145
+  _globals['_HEARTBEATMESSAGE']._serialized_start=147
+  _globals['_HEARTBEATMESSAGE']._serialized_end=217
   _globals['_VENTIONAPPSERVICE']._serialized_start=220
   _globals['_VENTIONAPPSERVICE']._serialized_end=379
 # @@protoc_insertion_point(module_scope)

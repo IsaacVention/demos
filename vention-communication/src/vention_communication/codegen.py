@@ -1,203 +1,144 @@
-# src/vention_communication/codegen.py
-"""
-Code-generator for .proto schema from registered actions and streams.
+# codegen.py
 
-✅ Supports
-    - Pydantic models
-    - Scalar types (str, int, float, bool, bytes)
-    - Empty requests/responses (→ google.protobuf.Empty)
-    - Server streams (including scalar payloads)
+from __future__ import annotations
+from typing import Any, Dict, Optional, Type
 
-⚠️ Not yet supported
-    - List, Optional, Union, nested models, enums
-"""
+from .decorators import collect_bundle
+from .typing_utils import is_pydantic_model
 
-from pathlib import Path
-from typing import Any
-from pydantic import BaseModel
-
-from .entries import ActionEntry, StreamEntry
-from .utils.typing_utils import Empty, is_pydantic_model
-
-# --------------------------------------------------------------------------- #
-# Type mapping
-# --------------------------------------------------------------------------- #
 
 _SCALAR_MAP = {
-    str: "string",
     int: "int64",
     float: "double",
+    str: "string",
     bool: "bool",
-    bytes: "bytes",
 }
 
-_EMPTY_IMPORT = 'import "google/protobuf/empty.proto";'
+HEADER = """syntax = "proto3";
+package vention.app.v1;
+
+import "google/protobuf/empty.proto";
+
+"""
 
 
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
+def _msg_name_for_scalar_stream(stream_name: str) -> str:
+    return f"{stream_name}Message"
 
 
-def _proto_type_of(py_type: type) -> str:
-    """Return the proto type name for a given Python type."""
-    if py_type is Empty:
-        return "google.protobuf.Empty"
-    if py_type in _SCALAR_MAP:
-        return _SCALAR_MAP[py_type]
-    if is_pydantic_model(py_type):
-        return py_type.__name__
-    raise ValueError(f"Unsupported type for proto generation: {py_type!r}")
+def _model_name(tp: Type[Any]) -> Optional[str]:
+    if is_pydantic_model(tp):
+        return tp.__name__
+    return None
 
 
-def _emit_message_for_model(model: type[BaseModel]) -> list[str]:
-    """Emit a `message` definition for a Pydantic model."""
-    lines: list[str] = [f"message {model.__name__} {{"]
-    num = 1
-    for name, field in model.model_fields.items():
-        field_type = field.annotation
-        try:
-            proto_type = _proto_type_of(field_type)
-        except ValueError:
-            raise ValueError(
-                f"Field {model.__name__}.{name} has unsupported type {field_type!r}"
-            )
-        lines.append(f"  {proto_type} {name} = {num};")
-        num += 1
-    lines.append("}")
-    return lines
+def generate_proto(app_name: str) -> str:
+    bundle = collect_bundle()
+    uses_empty = False
+    lines: list[str] = [HEADER]
 
+    # --- message types (pydantic models + scalar wrappers) ---
+    seen_models: set[str] = set()
+    scalar_wrappers: Dict[str, str] = {}
 
-def _uses_empty(actions: dict, streams: dict) -> bool:
-    for entry in actions.values():
-        if entry.input_type is Empty or entry.output_type is Empty:
-            return True
-    for entry in streams.values():
-        # streams always have Empty input
-        return True
-    return False
-
-
-# --------------------------------------------------------------------------- #
-# Main emitter
-# --------------------------------------------------------------------------- #
-
-
-def emit_proto(
-    actions: dict[str, ActionEntry],
-    streams: dict[str, StreamEntry],
-    out_dir: str,
-    package: str = "vention.app.v1",
-) -> None:
-    """
-    Generate a .proto file containing:
-      - syntax = "proto3"
-      - package <package>
-      - Imports if needed
-      - message definitions (models + scalar wrappers)
-      - service definition with all RPC methods
-    """
-    out_path = Path(out_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
-    file_path = out_path / "app.proto"
-
-    # ------------------------------------------------------------------ #
-    # Collect message models
-    # ------------------------------------------------------------------ #
-    message_models: set[type] = set()
-    for entry in actions.values():
-        if entry.input_type is not Empty and is_pydantic_model(entry.input_type):
-            message_models.add(entry.input_type)
-        if entry.output_type is not Empty and is_pydantic_model(entry.output_type):
-            message_models.add(entry.output_type)
-    for entry in streams.values():
-        if entry.payload is not Empty and is_pydantic_model(entry.payload):
-            message_models.add(entry.payload)
-
-    # ------------------------------------------------------------------ #
-    # Start building proto file
-    # ------------------------------------------------------------------ #
-    lines: list[str] = [
-        'syntax = "proto3";',
-        f"package {package};",
-        "",
-    ]
-
-    # Include Empty import if used
-    uses_empty = _uses_empty(actions, streams)
-
-    if uses_empty:
-        lines.append(_EMPTY_IMPORT)
-        lines.append("")
-
-    # ------------------------------------------------------------------ #
-    # Emit Pydantic model messages
-    # ------------------------------------------------------------------ #
-    for model in sorted(message_models, key=lambda m: m.__name__):
-        lines.extend(_emit_message_for_model(model))
-        lines.append("")
-
-    # ------------------------------------------------------------------ #
-    # Prepare scalar wrapper messages + service lines
-    # ------------------------------------------------------------------ #
-    scalar_wrappers: list[tuple[str, str]] = []
-    service_lines: list[str] = []
-
-    # ---- Actions ----
-    for name, entry in actions.items():
-        rpc_name = name[0].upper() + name[1:]
-        input_name = (
-            "google.protobuf.Empty"
-            if entry.input_type is Empty
-            else entry.input_type.__name__
-        )
-        output_name = (
-            "google.protobuf.Empty"
-            if entry.output_type is Empty
-            else entry.output_type.__name__
-        )
-        service_lines.append(f"  rpc {rpc_name}({input_name}) returns ({output_name});")
-
-    # ---- Streams ----
-    for name, entry in streams.items():
-        rpc_name = name[0].upper() + name[1:]
-        payload_type = entry.payload
-
-        if payload_type is Empty:
-            payload_name = "google.protobuf.Empty"
-        elif payload_type in _SCALAR_MAP:
-            msg_name = f"{rpc_name}Message"
-            scalar_wrappers.append((msg_name, _SCALAR_MAP[payload_type]))
-            payload_name = msg_name
-        elif is_pydantic_model(payload_type):
-            payload_name = payload_type.__name__
+    def touch_model(tp: Optional[Type[Any]]) -> None:
+        nonlocal uses_empty
+        if tp is None:
+            uses_empty = True
+            return
+        if is_pydantic_model(tp):
+            name = tp.__name__
+            if name in seen_models:
+                return
+            seen_models.add(name)
+            fields = []
+            idx = 1
+            for fname, fdef in tp.model_fields.items():  # type: ignore[attr-defined]
+                t = fdef.annotation
+                if t in _SCALAR_MAP:
+                    fields.append(f"  {_SCALAR_MAP[t]} {fname} = {idx};")
+                else:
+                    raise ValueError(
+                        f"Unsupported field type in model '{name}': {fname} : {t}"
+                    )
+                idx += 1
+            lines.append(f"message {name} {{")
+            lines.extend(fields)
+            lines.append("}\n")
+        elif tp in _SCALAR_MAP:
+            # Nothing: scalars inline in method sigs (except streams, handled below)
+            pass
         else:
-            raise ValueError(
-                f"Unsupported stream payload type for {rpc_name}: {payload_type!r}"
-            )
+            raise ValueError(f"Unsupported type: {tp}")
 
-        service_lines.append(
-            f"  rpc {rpc_name}(google.protobuf.Empty) returns (stream {payload_name});"
+    for a in bundle.actions:
+        touch_model(a.input_type)
+        touch_model(a.output_type)
+
+    for s in bundle.streams:
+        # Streams always have Empty input
+        uses_empty = True
+        if is_pydantic_model(s.payload_type):
+            touch_model(s.payload_type)
+        elif s.payload_type in _SCALAR_MAP:
+            # make wrapper
+            wn = _msg_name_for_scalar_stream(s.name)
+            scalar_wrappers[s.name] = wn
+            lines.append(f"message {wn} {{")
+            lines.append(f"  {_SCALAR_MAP[s.payload_type]} value = 1;")
+            lines.append("}\n")
+        else:
+            raise ValueError(f"Unsupported stream payload: {s.payload_type}")
+
+    # --- service ---
+    service = f"service {sanitize_service_name(app_name)}Service {{"
+    lines.append(service)
+
+    svc_prefix = "  rpc"
+
+    for a in bundle.actions:
+        in_t = (
+            "google.protobuf.Empty"
+            if a.input_type is None
+            else (
+                _SCALAR_MAP[a.input_type]
+                if a.input_type in _SCALAR_MAP
+                else a.input_type.__name__
+            )
+        )
+        out_t = (
+            "google.protobuf.Empty"
+            if a.output_type is None
+            else (
+                _SCALAR_MAP[a.output_type]
+                if a.output_type in _SCALAR_MAP
+                else a.output_type.__name__
+            )
+        )
+        lines.append(f"{svc_prefix} {a.name} ({in_t}) returns ({out_t});")
+
+    for s in bundle.streams:
+        out_t = None
+        if is_pydantic_model(s.payload_type):
+            out_t = s.payload_type.__name__
+        elif s.payload_type in _SCALAR_MAP:
+            out_t = scalar_wrappers[s.name]
+        else:
+            raise ValueError(f"Unsupported stream payload: {s.payload_type}")
+        lines.append(
+            f"{svc_prefix} {s.name} (google.protobuf.Empty) returns (stream {out_t});"
         )
 
-    # ------------------------------------------------------------------ #
-    # Emit scalar wrapper messages before the service
-    # ------------------------------------------------------------------ #
-    for msg_name, scalar_type in scalar_wrappers:
-        lines.append(f"message {msg_name} {{")
-        lines.append(f"  {scalar_type} value = 1;")
-        lines.append("}")
-        lines.append("")
+    lines.append("}\n")
 
-    # ------------------------------------------------------------------ #
-    # Emit service definition
-    # ------------------------------------------------------------------ #
-    lines.append("service VentionAppService {")
-    lines.extend(service_lines)
-    lines.append("}")
+    return "\n".join(lines)
 
-    # ------------------------------------------------------------------ #
-    # Write file
-    # ------------------------------------------------------------------ #
-    file_path.write_text("\n".join(lines) + "\n")
-    print(f"[vention-communication] emitted .proto → {file_path}")
+
+def sanitize_service_name(name: str) -> str:
+    # Letters/digits, capitalize words, drop invalid chars
+    import re
+
+    parts = re.findall(r"[A-Za-z0-9]+", name)
+    if not parts:
+        return "VentionApp"
+    return "".join(p[:1].upper() + p[1:] for p in parts)

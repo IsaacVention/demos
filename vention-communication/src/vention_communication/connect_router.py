@@ -1,125 +1,228 @@
-# src/vention_communication/connect_router.py
-"""
-Custom JSON-based Connect-like router for unary and streaming RPCs.
+# connect_router.py
 
-Stage 1 runtime: JSON over HTTP/1.1
-Compatible with ConnectRPC clients (connect-es) using `useBinaryFormat: false`.
-"""
-
+from __future__ import annotations
 import asyncio
 import json
-from typing import Any, Awaitable, Callable, Dict, Type
-import struct
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+
+from .entries import ActionEntry, StreamEntry
+from .errors import error_envelope, to_connect_error
+
+
+CONTENT_TYPE = "application/connect+json"
+
+
+def _frame(payload: Dict[str, Any], *, trailer: bool = False) -> bytes:
+    """Connect JSON frame: 1 byte flags + 4 bytes len (big-endian) + JSON bytes."""
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+    flag = 0x80 if trailer else 0x00
+    header = bytes([flag]) + len(body).to_bytes(4, byteorder="big", signed=False)
+    return header + body
+
+
+@dataclass(frozen=True)
+class _Subscriber:
+    queue: asyncio.Queue
+    joined_at: float = field(default_factory=lambda: time.time())
+    last_send_at: float = field(default_factory=lambda: time.time())
+
 
 class StreamManager:
-    """Manages subscribers for a single stream (multi-client broadcast)."""
+    """Topic-oriented fan-out with a distributor task per stream (latest-wins)."""
 
-    def __init__(self):
-        self.subscribers: set[asyncio.Queue] = set()
+    def __init__(self) -> None:
+        # name -> dict(entry, publish_queue, subscribers, last_value, task)
+        self._topics: Dict[str, Dict[str, Any]] = {}
 
-    def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
-        self.subscribers.add(q)
-        return q
+    # -------- topic lifecycle --------
 
-    def unsubscribe(self, q: asyncio.Queue):
-        self.subscribers.discard(q)
+    def ensure_topic(self, entry: StreamEntry) -> None:
+        """Create a topic if it doesn't exist (synchronous, safe before loop)."""
+        if entry.name in self._topics:
+            return
+        publish_queue: asyncio.Queue = asyncio.Queue()
+        subs: set[_Subscriber] = set()
+        topic = {
+            "entry": entry,
+            "publish_queue": publish_queue,
+            "subscribers": subs,
+            "last_value": None,
+            "task": None,  # set when loop is running
+        }
+        self._topics[entry.name] = topic
+        # If an event loop is running, start distributor now
+        try:
+            loop = asyncio.get_running_loop()
+            topic["task"] = loop.create_task(self._distributor(entry.name))
+        except RuntimeError:
+            # No running loop yet; distributor will start on first subscribe/publish
+            pass
 
-    async def publish(self, data: Any):
-        # non-blocking broadcast
-        for q in list(self.subscribers):
+    def start_distributor_if_needed(self, name: str) -> None:
+        topic = self._topics[name]
+        if topic["task"] is None:
+            topic["task"] = asyncio.create_task(self._distributor(name))
+
+    def add_stream(self, entry: StreamEntry) -> None:
+        self.ensure_topic(entry)
+
+    # -------- publish/subscribe --------
+
+    def publish(self, stream_name: str, item: Any) -> None:
+        topic = self._topics.get(stream_name)
+        if topic is None:
+            raise KeyError(f"Unknown stream: {stream_name}")
+        self.start_distributor_if_needed(stream_name)
+        topic["publish_queue"].put_nowait(item)
+
+    def subscribe(self, stream_name: str) -> _Subscriber:
+        topic = self._topics[stream_name]
+        entry: StreamEntry = topic["entry"]
+        q: asyncio.Queue = asyncio.Queue(maxsize=entry.queue_maxsize)
+        sub = _Subscriber(queue=q)
+        topic["subscribers"].add(sub)
+        self.start_distributor_if_needed(stream_name)
+        # Optional replay
+        if entry.replay and topic["last_value"] is not None:
             try:
-                q.put_nowait(data)
+                q.put_nowait(topic["last_value"])
             except asyncio.QueueFull:
-                pass
+                _ = q.get_nowait()
+                q.put_nowait(topic["last_value"])
+        return sub
 
+    def unsubscribe(self, stream_name: str, sub: _Subscriber) -> None:
+        topic = self._topics.get(stream_name)
+        if topic:
+            topic["subscribers"].discard(sub)
 
-class ConnectRouter(APIRouter):
-    """
-    Custom ASGI router that registers and serves unary and streaming RPCs
-    using JSON serialization for maximum browser compatibility.
+    # -------- internal distributor (latest-wins per subscriber) --------
 
-    The actual Connect wire framing (envelopes/trailers) can be added later
-    for full ConnectRPC compliance.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.unary_handlers: Dict[str, Callable[[Any], Awaitable[Any]]] = {}
-        self.stream_handlers: Dict[str, Callable[..., Awaitable[Any]]] = {}
-
-    # -------------------------------------------------------
-    # UNARY CALLS
-    # -------------------------------------------------------
-    def add_unary(
-        self,
-        name: str,
-        fn: Callable[..., Awaitable[Any]],
-        input_type: Type[BaseModel],
-        output_type: Type[BaseModel],
-    ):
-        rpc_name = name[0].upper() + name[1:]
-        route_path = f"/vention.app.v1.VentionAppService/{rpc_name}"
-        self.unary_handlers[name] = fn
-
-        @self.post(route_path)
-        async def unary_endpoint(request: Request):
-            try:
-                payload = await request.json()
-                model = input_type(**payload) if input_type and payload else None
-                result = await fn(model) if model else await fn()
-                # if Pydantic model returned, convert to dict
-                if isinstance(result, BaseModel):
-                    result = result.model_dump()
-                return JSONResponse(result)
-            except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
-
-    # -------------------------------------------------------
-    # SERVER STREAMS
-    # -------------------------------------------------------
-    def add_stream(
-        self,
-        name: str,
-        handler: Callable[..., Awaitable[Any]],
-        payload_type: Type[Any],
-    ):
-        rpc_name = name[0].upper() + name[1:]
-        route_path = f"/vention.app.v1.VentionAppService/{rpc_name}"
-
-        manager = StreamManager()  # shared publisher per stream
-        self.stream_handlers[name] = manager  # store for publisher access
-
-        @self.post(route_path)
-        async def stream_endpoint(request: Request):
-            """Each subscriber opens a connection and receives published messages."""
-            q = manager.subscribe()
-
-            async def event_generator():
+    async def _distributor(self, stream_name: str) -> None:
+        topic = self._topics[stream_name]
+        publish_queue: asyncio.Queue = topic["publish_queue"]
+        subs: set[_Subscriber] = topic["subscribers"]
+        while True:
+            item = await publish_queue.get()
+            topic["last_value"] = item
+            dead: list[_Subscriber] = []
+            for sub in list(subs):
                 try:
-                    while True:
-                        msg = await q.get()
-                        if isinstance(msg, BaseModel):
-                            msg = msg.model_dump()
-                        frame = {"value": msg} if not isinstance(msg, (dict, list)) else msg
-
-                        payload = json.dumps(frame).encode("utf-8")
-                        header = b"\x00" + struct.pack(">I", len(payload))
-                        yield header + payload
-                finally:
-                    manager.unsubscribe(q)
-
-            return StreamingResponse(
-                event_generator(),
-                media_type="application/connect+json",
-                headers={
-                    "transfer-encoding": "chunked",
-                    "x-content-type-options": "nosniff",
-                },
-            )
+                    sub.queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    try:
+                        _ = sub.queue.get_nowait()
+                    except Exception:
+                        pass
+                    try:
+                        sub.queue.put_nowait(item)
+                    except Exception:
+                        dead.append(sub)
+            for d in dead:
+                subs.discard(d)
 
 
+class ConnectRouter:
+    def __init__(self) -> None:
+        self.router = APIRouter()
+        self._unaries: Dict[str, ActionEntry] = {}
+        self._streams: Dict[str, StreamEntry] = {}
+        self.manager = StreamManager()
+
+    # ---------- Registration ----------
+
+    def add_unary(self, entry: ActionEntry, service_fqn: str) -> None:
+        self._unaries[entry.name] = entry
+        path = f"/{service_fqn}/{entry.name}"
+
+        @self.router.post(path)
+        async def _handler(req: Request) -> JSONResponse:
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+
+            try:
+                if entry.input_type is None:
+                    result = await _maybe_await(entry.func())
+                else:
+                    arg_type = entry.input_type
+                    if hasattr(arg_type, "model_validate"):
+                        arg = arg_type.model_validate(body)
+                    else:
+                        arg = body
+                    result = await _maybe_await(entry.func(arg))
+
+                if hasattr(result, "model_dump"):
+                    result = result.model_dump()
+                return JSONResponse(result or {})
+            except Exception as e:
+                return JSONResponse(error_envelope(e))
+
+    def add_stream(self, entry: StreamEntry, service_fqn: str) -> None:
+        # Eagerly create topic so early publishers work
+        self._streams[entry.name] = entry
+        self.manager.add_stream(entry)
+
+        path = f"/{service_fqn}/{entry.name}"
+
+        async def _stream_iter(sub: _Subscriber) -> Any:
+            write_timeout = entry.write_timeout
+            last_send = time.time()
+
+            try:
+                while True:
+                    # Wait forever for a message (no heartbeats)
+                    item = await sub.queue.get()
+                    payload = _serialize_stream_item(item)
+                    last_send = time.time()
+                    yield _frame(payload, trailer=False)
+
+                    # Optional write-timeout: if too long since last successful send
+                    if (
+                        write_timeout is not None
+                        and (time.time() - last_send) > write_timeout
+                    ):
+                        raise TimeoutError(f"write timeout after {write_timeout}s")
+            except Exception as e:
+                trailer = error_envelope(to_connect_error(e))
+                yield _frame(trailer, trailer=True)
+            finally:
+                self.manager.unsubscribe(entry.name, sub)
+
+        @self.router.post(path)
+        async def _handler(_: Request) -> StreamingResponse:
+            self.manager.start_distributor_if_needed(entry.name)
+            sub = self.manager.subscribe(entry.name)
+            return StreamingResponse(_stream_iter(sub), media_type=CONTENT_TYPE)
+
+    # ---------- Utilities ----------
+
+    def publish(self, name: str, item: Any) -> None:
+        if name not in self.manager._topics:
+            entry = self._streams.get(name)
+            if not entry:
+                raise KeyError(f"Unknown stream: {name}")
+            self.manager.add_stream(entry)
+        self.manager.publish(name, item)
+
+
+def _serialize_stream_item(item: Any) -> Dict[str, Any]:
+    if hasattr(item, "model_dump"):
+        return item.model_dump()
+    if isinstance(item, (dict, list)):
+        return item  # type: ignore[return-value]
+    return {"value": item}
+
+
+async def _maybe_await(v: Any) -> Any:
+    if asyncio.iscoroutine(v) or isinstance(v, asyncio.Future):
+        return await v
+    return v

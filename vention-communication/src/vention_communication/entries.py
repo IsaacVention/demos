@@ -1,21 +1,34 @@
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Type
+# entries.py
+
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional, Type
+
 
 @dataclass
 class ActionEntry:
     name: str
-    fn: Callable[..., Awaitable[Any]]
-    input_type: Type
-    output_type: Type
+    func: Callable[..., Any]
+    input_type: Optional[Type[Any]]
+    output_type: Optional[Type[Any]]
+
 
 @dataclass
 class StreamEntry:
     name: str
-    payload: Type
-    handler: Callable[..., Awaitable[Any]]
-    publisher: Callable[..., Awaitable[None]]
+    func: Callable[..., Any]  # publisher wrapper
+    payload_type: Type[Any]
+    # --- New, configurable behavior ---
+    replay: bool = True  # enqueue last_value on new subscriber
+    write_timeout: Optional[float] = None  # seconds without a successful send → drop
+    queue_maxsize: int = 1  # per-subscriber buffer; 1 = latest-wins
+
 
 @dataclass
 class RpcBundle:
-    actions: dict[str, ActionEntry]
-    streams: dict[str, StreamEntry]
+    actions: list[ActionEntry] = field(default_factory=list)
+    streams: list[StreamEntry] = field(default_factory=list)
+
+    def extend(self, other: "RpcBundle") -> None:
+        self.actions.extend(other.actions)
+        self.streams.extend(other.streams)

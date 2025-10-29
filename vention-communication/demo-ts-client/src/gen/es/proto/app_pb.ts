@@ -7,49 +7,6 @@ import type { BinaryReadOptions, FieldList, JsonReadOptions, JsonValue, PartialM
 import { Message, proto3, protoInt64 } from "@bufbuild/protobuf";
 
 /**
- * @generated from message vention.app.v1.HeartbeatMessage
- */
-export class HeartbeatMessage extends Message<HeartbeatMessage> {
-  /**
-   * @generated from field: string value = 1;
-   */
-  value = "";
-
-  /**
-   * @generated from field: int64 timestamp = 2;
-   */
-  timestamp = protoInt64.zero;
-
-  constructor(data?: PartialMessage<HeartbeatMessage>) {
-    super();
-    proto3.util.initPartial(data, this);
-  }
-
-  static readonly runtime: typeof proto3 = proto3;
-  static readonly typeName = "vention.app.v1.HeartbeatMessage";
-  static readonly fields: FieldList = proto3.util.newFieldList(() => [
-    { no: 1, name: "value", kind: "scalar", T: 9 /* ScalarType.STRING */ },
-    { no: 2, name: "timestamp", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
-  ]);
-
-  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): HeartbeatMessage {
-    return new HeartbeatMessage().fromBinary(bytes, options);
-  }
-
-  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): HeartbeatMessage {
-    return new HeartbeatMessage().fromJson(jsonValue, options);
-  }
-
-  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): HeartbeatMessage {
-    return new HeartbeatMessage().fromJsonString(jsonString, options);
-  }
-
-  static equals(a: HeartbeatMessage | PlainMessage<HeartbeatMessage> | undefined, b: HeartbeatMessage | PlainMessage<HeartbeatMessage> | undefined): boolean {
-    return proto3.util.equals(HeartbeatMessage, a, b);
-  }
-}
-
-/**
  * @generated from message vention.app.v1.PingRequest
  */
 export class PingRequest extends Message<PingRequest> {
@@ -120,6 +77,49 @@ export class PingResponse extends Message<PingResponse> {
 
   static equals(a: PingResponse | PlainMessage<PingResponse> | undefined, b: PingResponse | PlainMessage<PingResponse> | undefined): boolean {
     return proto3.util.equals(PingResponse, a, b);
+  }
+}
+
+/**
+ * @generated from message vention.app.v1.HeartbeatMessage
+ */
+export class HeartbeatMessage extends Message<HeartbeatMessage> {
+  /**
+   * @generated from field: string value = 1;
+   */
+  value = "";
+
+  /**
+   * @generated from field: int64 timestamp = 2;
+   */
+  timestamp = protoInt64.zero;
+
+  constructor(data?: PartialMessage<HeartbeatMessage>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "vention.app.v1.HeartbeatMessage";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "value", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "timestamp", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): HeartbeatMessage {
+    return new HeartbeatMessage().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): HeartbeatMessage {
+    return new HeartbeatMessage().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): HeartbeatMessage {
+    return new HeartbeatMessage().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: HeartbeatMessage | PlainMessage<HeartbeatMessage> | undefined, b: HeartbeatMessage | PlainMessage<HeartbeatMessage> | undefined): boolean {
+    return proto3.util.equals(HeartbeatMessage, a, b);
   }
 }
 

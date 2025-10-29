@@ -12,19 +12,19 @@ export const VentionAppService = {
   typeName: "vention.app.v1.VentionAppService",
   methods: {
     /**
-     * @generated from rpc vention.app.v1.VentionAppService.Ping
+     * @generated from rpc vention.app.v1.VentionAppService.ping
      */
     ping: {
-      name: "Ping",
+      name: "ping",
       I: PingRequest,
       O: PingResponse,
       kind: MethodKind.Unary,
     },
     /**
-     * @generated from rpc vention.app.v1.VentionAppService.Heartbeat
+     * @generated from rpc vention.app.v1.VentionAppService.heartbeat
      */
     heartbeat: {
-      name: "Heartbeat",
+      name: "heartbeat",
       I: Empty,
       O: HeartbeatMessage,
       kind: MethodKind.ServerStreaming,

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from src.vention_communication import VentionApp, action, stream
 
-app = VentionApp(title="Demo")
+app = VentionApp(title="Demo", emit_proto=True)
 
 # Enable CORS for browser testing
 app.add_middleware(
@@ -39,7 +39,7 @@ async def ping(req: PingRequest) -> PingResponse:
 # -------------------------------
 # Heartbeat (Server Stream)
 # -------------------------------
-@stream(name="heartbeat", payload=HeartbeatMessage)
+@stream(name="heartbeat", payload=HeartbeatMessage, replay=True)
 async def heartbeat():
     """Publisher function — every call broadcasts to all subscribers."""
     value = round(random.uniform(0, 100), 2)
@@ -55,7 +55,7 @@ async def start_heartbeat_publisher():
     async def publish_loop():
         while True:
             await heartbeat()  # broadcast to all connected subscribers
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
     asyncio.create_task(publish_loop())
 
@@ -63,4 +63,4 @@ async def start_heartbeat_publisher():
 # -------------------------------
 # Finalize app
 # -------------------------------
-app.finalize(emit_proto=True)
+app.finalize()
