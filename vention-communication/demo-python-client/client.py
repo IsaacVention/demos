@@ -7,7 +7,6 @@ from proto.app_connect import VentionAppServiceClient
 
 async def main():
     async with AsyncClient() as session:
-        # ✅ new signature
         client = VentionAppServiceClient(
             "http://localhost:8000/rpc",   # address
             proto_json=True,               # use JSON-encoded Connect RPCs
