@@ -1,0 +1,47 @@
+syntax = "proto3";
+package vention.app.v1;
+
+import "google/protobuf/empty.proto";
+
+
+message SMStateResponse {
+  string state = 1;
+  string last_state = 2;
+}
+
+message SMHistoryResponse {
+  string history = 1;
+}
+
+message SMTriggerResponse {
+  string result = 1;
+  string previous_state = 2;
+  string new_state = 3;
+}
+
+message StateChangeEvent {
+  string old_state = 1;
+  string new_state = 2;
+  string trigger = 3;
+  string time_remaining = 4;
+}
+
+service VentionAppService {
+  rpc GetState (google.protobuf.Empty) returns (SMStateResponse);
+  rpc GetHistory (google.protobuf.Empty) returns (SMHistoryResponse);
+  rpc answer_submitted (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc problem_generated (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc problem_presented (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc recover__QuizStates_generating (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc recover__QuizStates_grading (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc recover__QuizStates_presenting (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc reset (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc start (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc to_QuizStates (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc to_QuizStates_generating (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc to_QuizStates_grading (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc to_QuizStates_presenting (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc to_fault (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc to_ready (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc state_change (google.protobuf.Empty) returns (stream StateChangeEvent);
+}
