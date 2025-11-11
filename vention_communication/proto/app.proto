@@ -4,44 +4,122 @@ package vention.app.v1;
 import "google/protobuf/empty.proto";
 
 
-message SMStateResponse {
-  string state = 1;
-  string last_state = 2;
+message CrudListRequest {
+  bool include_deleted = 1;
 }
 
-message SMHistoryResponse {
-  string history = 1;
+message Quiz {
+  int64 id = 1;
+  int64 box_height = 2;
+  int64 num_boxes = 3;
+  bool can_reach = 4;
+  bool correct = 5;
 }
 
-message SMTriggerResponse {
-  string result = 1;
-  string previous_state = 2;
-  string new_state = 3;
+message QuizListResponse {
+  repeated Quiz records = 1;
+}
+
+message CrudGetRequest {
+  int64 record_id = 1;
+  bool include_deleted = 2;
+}
+
+message CrudCreateRequest {
+  string payload = 1;
+  string actor = 2;
+}
+
+message CrudUpdateRequest {
+  int64 record_id = 1;
+  string payload = 2;
+  string actor = 3;
+}
+
+message CrudDeleteRequest {
+  int64 record_id = 1;
+  string actor = 2;
+}
+
+message CrudRestoreRequest {
+  int64 record_id = 1;
+  string actor = 2;
+}
+
+message Configuration {
+  int64 id = 1;
+  int64 max_box_height = 2;
+  int64 timeout_seconds = 3;
+  int64 robot_reach = 4;
+}
+
+message ConfigListResponse {
+  repeated Configuration records = 1;
+}
+
+message AuditQueryRequest {
+  string component = 1;
+  int64 record_id = 2;
+  string actor = 3;
+  string operation = 4;
+  string since = 5;
+  string until = 6;
+  int64 limit = 7;
+  int64 offset = 8;
+}
+
+message FileResponse {
+  string filename = 1;
+  string bytes = 2;
+}
+
+message RestoreRequest {
+  string bytes = 1;
+  string filename = 2;
+  bool integrity_check = 3;
+  bool dry_run = 4;
 }
 
 message StateChangeEvent {
   string old_state = 1;
   string new_state = 2;
   string trigger = 3;
-  string time_remaining = 4;
+  int64 time_remaining = 4;
 }
 
 service VentionAppService {
-  rpc GetState (google.protobuf.Empty) returns (SMStateResponse);
-  rpc GetHistory (google.protobuf.Empty) returns (SMHistoryResponse);
-  rpc answer_submitted (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc problem_generated (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc problem_presented (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc recover__QuizStates_generating (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc recover__QuizStates_grading (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc recover__QuizStates_presenting (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc reset (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc start (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc to_QuizStates (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc to_QuizStates_generating (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc to_QuizStates_grading (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc to_QuizStates_presenting (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc to_fault (google.protobuf.Empty) returns (SMTriggerResponse);
-  rpc to_ready (google.protobuf.Empty) returns (SMTriggerResponse);
+  rpc GetState (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc GetHistory (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Answer_submitted (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Problem_generated (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Problem_presented (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Recover__QuizStates_generating (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Recover__QuizStates_grading (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Recover__QuizStates_presenting (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Reset (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_Start (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_To_QuizStates (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_To_QuizStates_generating (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_To_QuizStates_grading (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_To_QuizStates_presenting (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_To_fault (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Trigger_To_ready (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Quiz_ListRecords (CrudListRequest) returns (QuizListResponse);
+  rpc Quiz_GetRecord (CrudGetRequest) returns (Quiz);
+  rpc Quiz_CreateRecord (CrudCreateRequest) returns (Quiz);
+  rpc Quiz_UpdateRecord (CrudUpdateRequest) returns (Quiz);
+  rpc Quiz_DeleteRecord (CrudDeleteRequest) returns (google.protobuf.Empty);
+  rpc Quiz_RestoreRecord (CrudRestoreRequest) returns (Quiz);
+  rpc Config_ListRecords (CrudListRequest) returns (ConfigListResponse);
+  rpc Config_GetRecord (CrudGetRequest) returns (Configuration);
+  rpc Config_CreateRecord (CrudCreateRequest) returns (Configuration);
+  rpc Config_UpdateRecord (CrudUpdateRequest) returns (Configuration);
+  rpc Config_DeleteRecord (CrudDeleteRequest) returns (google.protobuf.Empty);
+  rpc Config_RestoreRecord (CrudRestoreRequest) returns (Configuration);
+  rpc Database_Health (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Database_ReadAudit (AuditQueryRequest) returns (google.protobuf.Empty);
+  rpc Database_ExportZip (google.protobuf.Empty) returns (FileResponse);
+  rpc Database_BackupSqlite (google.protobuf.Empty) returns (FileResponse);
+  rpc Database_RestoreSqlite (RestoreRequest) returns (google.protobuf.Empty);
   rpc state_change (google.protobuf.Empty) returns (stream StateChangeEvent);
 }

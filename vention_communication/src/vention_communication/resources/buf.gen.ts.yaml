@@ -1,15 +1,12 @@
 version: v2
-
 plugins:
   - remote: buf.build/bufbuild/es:v1.10.0
     out: gen/es
     opt:
       - target=ts
-      - message_type=object
   - remote: buf.build/connectrpc/es:v1.6.1
     out: gen/connect
     opt:
       - target=ts
       - import_extension=.ts
       - ts_nocheck=false
-      - plain_messages=true

@@ -9,9 +9,11 @@ for the quiz application, including state machine management and data access.
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from src.vention_communication import VentionApp, action, stream
+from src.vention_communication.app import VentionApp
+from src.vention_communication.decorators import stream
 from vention_storage.src.storage.accessor import ModelAccessor
 from vention_storage.src.storage.bootstrap import bootstrap
+from vention_storage.src.storage.vention_communication import build_storage_bundle
 from vention_state_machine.src.state_machine.vention_communication import build_state_machine_bundle
 
 from demo_server.app import QuizMachine
@@ -46,7 +48,7 @@ quiz_accessor = ModelAccessor(Quiz, "quiz")
 config_accessor = ModelAccessor(Configuration, "config")
 
 # Initialize database with accessors
-bootstrap(app, accessors=[quiz_accessor, config_accessor])
+bootstrap()
 
 # Initialize default configuration if none exists
 if not config_accessor.all():
@@ -102,5 +104,6 @@ quiz_machine = QuizMachine(
 )
 
 # Include state machine router for all state machine operations
-app.extend_bundle(build_state_machine_bundle(quiz_machine))
+app.register_rpc_plugin(build_state_machine_bundle(quiz_machine))
+app.register_rpc_plugin(build_storage_bundle(accessors=[quiz_accessor, config_accessor]))
 app.finalize()

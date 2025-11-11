@@ -25,6 +25,7 @@ __all__ = [
     "db_file_path",
     "build_backup_bytes",
     "validate_sqlite_file",
+    "save_bytes_to_temp",
     "safe_unlink",
 ]
 
@@ -156,6 +157,19 @@ def save_upload_to_temp(file: UploadFile, dest_dir: Path) -> tuple[Path, int]:
         file.file.close()
     except Exception:
         pass
+    return tmp_path, total
+
+
+def save_bytes_to_temp(
+    file_bytes: bytes, dest_dir: Path, *, filename: str = "upload.sqlite"
+) -> tuple[Path, int]:
+    """Save bytes to a temporary file in the destination directory."""
+    with tempfile.NamedTemporaryFile(
+        prefix="restore-", suffix=".sqlite", dir=dest_dir, delete=False
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+        tmp.write(file_bytes)
+        total = len(file_bytes)
     return tmp_path, total
 
 

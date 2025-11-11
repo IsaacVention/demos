@@ -17,11 +17,7 @@ logger = logging.getLogger(__name__)
 CONTENT_TYPE = "application/connect+json"
 
 
-# ---------- Frame encoding ----------
-
-
 def _frame(payload: Dict[str, Any], *, trailer: bool = False) -> bytes:
-    """Connect JSON frame: 1 byte flags + 4 bytes len (big-endian) + JSON bytes."""
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )
@@ -35,34 +31,32 @@ def _frame(payload: Dict[str, Any], *, trailer: bool = False) -> bytes:
 
 @dataclass(eq=False, unsafe_hash=True)
 class _Subscriber:
-    queue: asyncio.Queue
+    queue: asyncio.Queue[Any]
     joined_at: float = field(default_factory=lambda: time.time())
     last_send_at: float = field(default_factory=lambda: time.time())
 
 
-# ---------- StreamManager ----------
-
-
 class StreamManager:
-    """Topic-oriented fan-out with a distributor task per stream (latest-wins)."""
+    """Topic-oriented fan-out with a distributor task per stream.
+
+    Supports configurable delivery policies: "latest" (drops old items when queue is full)
+    or "fifo" (waits for space to ensure all items are delivered).
+    """
 
     def __init__(self) -> None:
-        # name -> dict(entry, publish_queue, subscribers, last_value, task)
         self._topics: Dict[str, Dict[str, Any]] = {}
-
-    # --- topic lifecycle ---
 
     def ensure_topic(self, entry: StreamEntry) -> None:
         """Create a topic if it doesn't exist (synchronous, safe before loop)."""
         if entry.name in self._topics:
             return
 
-        publish_queue: asyncio.Queue = asyncio.Queue()
-        subs: set[_Subscriber] = set()
+        publish_queue: asyncio.Queue[Any] = asyncio.Queue()
+        subscribers: set[_Subscriber] = set()
         topic = {
             "entry": entry,
             "publish_queue": publish_queue,
-            "subscribers": subs,
+            "subscribers": subscribers,
             "last_value": None,
             "task": None,
         }
@@ -73,24 +67,40 @@ class StreamManager:
             loop = asyncio.get_running_loop()
             topic["task"] = loop.create_task(self._distributor(entry.name))
         except RuntimeError:
-            # Will be started lazily later
             pass
 
-    def start_distributor_if_needed(self, name: str) -> None:
-        topic = self._topics[name]
+    def start_distributor_if_needed(self, stream_name: str) -> None:
+        """Start the distributor task if it doesn't exist or has completed.
+
+        Args:
+            stream_name: Name of the stream topic
+        """
+        topic = self._topics[stream_name]
         if topic["task"] is None or topic["task"].done():
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = asyncio.get_event_loop()
-            topic["task"] = loop.create_task(self._distributor(name))
+            topic["task"] = loop.create_task(self._distributor(stream_name))
 
     def add_stream(self, entry: StreamEntry) -> None:
+        """Register a stream entry and ensure its topic exists.
+
+        Args:
+            entry: Stream entry to register
+        """
         self.ensure_topic(entry)
 
-    # --- publish/subscribe ---
-
     def publish(self, stream_name: str, item: Any) -> None:
+        """Publish an item to a stream topic.
+
+        Args:
+            stream_name: Name of the stream topic
+            item: Item to publish
+
+        Raises:
+            KeyError: If the stream topic doesn't exist
+        """
         topic = self._topics.get(stream_name)
         if topic is None:
             raise KeyError(f"Unknown stream: {stream_name}")
@@ -98,160 +108,193 @@ class StreamManager:
         topic["publish_queue"].put_nowait(item)
 
     def subscribe(self, stream_name: str) -> _Subscriber:
+        """Subscribe to a stream topic and return a subscriber.
+
+        If replay is enabled, the last published value will be enqueued
+        for the new subscriber.
+
+        Args:
+            stream_name: Name of the stream topic
+
+        Returns:
+            A subscriber instance with its own queue
+        """
         topic = self._topics[stream_name]
         entry: StreamEntry = topic["entry"]
-        q: asyncio.Queue = asyncio.Queue(maxsize=entry.queue_maxsize)
-        sub = _Subscriber(queue=q)
-        topic["subscribers"].add(sub)
+        subscriber_queue: asyncio.Queue[Any] = asyncio.Queue(
+            maxsize=entry.queue_maxsize
+        )
+        subscriber = _Subscriber(queue=subscriber_queue)
+        topic["subscribers"].add(subscriber)
         self.start_distributor_if_needed(stream_name)
-        # Optional replay
+
         if entry.replay and topic["last_value"] is not None:
             try:
-                q.put_nowait(topic["last_value"])
+                subscriber_queue.put_nowait(topic["last_value"])
             except asyncio.QueueFull:
-                _ = q.get_nowait()
-                q.put_nowait(topic["last_value"])
-        return sub
+                _ = subscriber_queue.get_nowait()
+                subscriber_queue.put_nowait(topic["last_value"])
+        return subscriber
 
-    def unsubscribe(self, stream_name: str, sub: _Subscriber) -> None:
+    def unsubscribe(self, stream_name: str, subscriber: _Subscriber) -> None:
+        """Remove a subscriber from a stream topic.
+
+        Args:
+            stream_name: Name of the stream topic
+            subscriber: Subscriber to remove
+        """
         topic = self._topics.get(stream_name)
         if topic:
-            topic["subscribers"].discard(sub)
-
-    # --- distributor (latest-wins per subscriber) ---
+            topic["subscribers"].discard(subscriber)
 
     async def _distributor(self, stream_name: str) -> None:
         topic = self._topics[stream_name]
-        publish_queue: asyncio.Queue = topic["publish_queue"]
-        subs: set[_Subscriber] = topic["subscribers"]
+        publish_queue: asyncio.Queue[Any] = topic["publish_queue"]
+        subscribers: set[_Subscriber] = topic["subscribers"]
 
         while True:
             item = await publish_queue.get()
             topic["last_value"] = item
-            dead: list[_Subscriber] = []
+            dead_subscribers: list[_Subscriber] = []
             entry: StreamEntry = topic["entry"]
 
-            for sub in list(subs):
+            for subscriber in list(subscribers):
                 try:
                     if entry.policy == "fifo":
-                        # Wait until space is free; preserve order
-                        await sub.queue.put(item)
+                        await subscriber.queue.put(item)
                     else:
-                        # latest-wins: drop oldest and push newest
-                        sub.queue.put_nowait(item)
+                        subscriber.queue.put_nowait(item)
                 except asyncio.QueueFull:
                     try:
-                        _ = sub.queue.get_nowait()
+                        _ = subscriber.queue.get_nowait()
                     except Exception:
                         pass
                     try:
-                        sub.queue.put_nowait(item)
+                        subscriber.queue.put_nowait(item)
                     except Exception:
-                        dead.append(sub)
+                        dead_subscribers.append(subscriber)
 
-            for d in dead:
-                subs.discard(d)
-
-
-# ---------- ConnectRouter ----------
+            for dead_subscriber in dead_subscribers:
+                subscribers.discard(dead_subscriber)
 
 
 class ConnectRouter:
+    """Router for Connect-style RPC endpoints."""
+
     def __init__(self) -> None:
+        """Initialize the ConnectRouter with empty registries."""
         self.router = APIRouter()
         self._unaries: Dict[str, ActionEntry] = {}
         self._streams: Dict[str, StreamEntry] = {}
         self.manager = StreamManager()
 
-    # --- Registration (unary) ---
-
     def add_unary(self, entry: ActionEntry, service_fqn: str) -> None:
+        """Register a unary RPC action endpoint.
+
+        Args:
+            entry: Action entry containing the handler function and types
+            service_fqn: Fully qualified service name for the path
+        """
         self._unaries[entry.name] = entry
         path = f"/{service_fqn}/{entry.name}"
 
         @self.router.post(path)
-        async def _handler(req: Request) -> JSONResponse:
+        async def _handler(request: Request) -> JSONResponse:
             try:
-                body = await req.json()
+                request_body = await request.json()
             except Exception:
-                body = {}
+                request_body = {}
 
             try:
                 if entry.input_type is None:
                     result = await _maybe_await(entry.func())
                 else:
-                    arg_type = entry.input_type
-                    if hasattr(arg_type, "model_validate"):
-                        arg = arg_type.model_validate(body)
+                    input_type = entry.input_type
+                    if hasattr(input_type, "model_validate"):
+                        validated_arg = input_type.model_validate(request_body)
                     else:
-                        arg = body
-                    result = await _maybe_await(entry.func(arg))
+                        validated_arg = request_body
+                    result = await _maybe_await(entry.func(validated_arg))
 
                 if hasattr(result, "model_dump"):
                     result = result.model_dump()
                 return JSONResponse(result or {})
-            except Exception as e:
-                return JSONResponse(error_envelope(e))
-
-    # --- Registration (stream) ---
+            except Exception as exc:
+                return JSONResponse(error_envelope(exc))
 
     def add_stream(self, entry: StreamEntry, service_fqn: str) -> None:
-        # Eagerly create topic so early publishers work
+        """Register a streaming RPC endpoint.
+
+        Args:
+            entry: Stream entry containing configuration
+            service_fqn: Fully qualified service name for the path
+        """
         self._streams[entry.name] = entry
         self.manager.add_stream(entry)
 
         path = f"/{service_fqn}/{entry.name}"
 
-        async def _stream_iter(sub: _Subscriber) -> Any:
+        async def _stream_iter(subscriber: _Subscriber) -> Any:
             """Async generator yielding Connect frames for each stream item."""
             try:
                 while True:
-                    item = await sub.queue.get()
-                    payload = _serialize_stream_item(item)
+                    stream_item = await subscriber.queue.get()
+                    payload = _serialize_stream_item(stream_item)
                     yield _frame(payload)
-                    await asyncio.sleep(0)  # allow flush per frame
+                    await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
-                trailer = error_envelope(to_connect_error(e))
-                yield _frame(trailer, trailer=True)
+            except Exception as exc:
+                error_trailer = error_envelope(to_connect_error(exc))
+                yield _frame(error_trailer, trailer=True)
             finally:
-                self.manager.unsubscribe(entry.name, sub)
+                self.manager.unsubscribe(entry.name, subscriber)
 
         @self.router.post(path)
         async def _handler(_: Request) -> StreamingResponse:
             self.manager.start_distributor_if_needed(entry.name)
-            sub = self.manager.subscribe(entry.name)
+            subscriber = self.manager.subscribe(entry.name)
             logger.debug(f"Stream subscribed: {entry.name}")
             return StreamingResponse(
-                _stream_iter(sub),
+                _stream_iter(subscriber),
                 media_type=CONTENT_TYPE,
                 headers={"Transfer-Encoding": "chunked"},
             )
 
-    # --- Utilities ---
+    def publish(self, stream_name: str, item: Any) -> None:
+        """Publish an item to a stream.
 
-    def publish(self, name: str, item: Any) -> None:
-        if name not in self.manager._topics:
-            entry = self._streams.get(name)
+        Creates the stream topic if it doesn't exist yet.
+
+        Args:
+            stream_name: Name of the stream
+            item: Item to publish
+
+        Raises:
+            KeyError: If the stream doesn't exist and can't be found
+        """
+        if stream_name not in self.manager._topics:
+            entry = self._streams.get(stream_name)
             if not entry:
-                raise KeyError(f"Unknown stream: {name}")
+                raise KeyError(f"Unknown stream: {stream_name}")
             self.manager.add_stream(entry)
-        self.manager.publish(name, item)
-
-
-# ---------- Helpers ----------
+        self.manager.publish(stream_name, item)
 
 
 def _serialize_stream_item(item: Any) -> Dict[str, Any]:
     if hasattr(item, "model_dump"):
-        return item.model_dump()
-    if isinstance(item, (dict, list)):
-        return item  # type: ignore[return-value]
+        dumped = item.model_dump()
+        if isinstance(dumped, dict):
+            return dumped
+        return {"value": dumped}
+    if isinstance(item, dict):
+        return item
+    if isinstance(item, list):
+        return {"value": item}
     return {"value": item}
 
 
-async def _maybe_await(v: Any) -> Any:
-    if asyncio.iscoroutine(v) or isinstance(v, asyncio.Future):
-        return await v
-    return v
+async def _maybe_await(value: Any) -> Any:
+    if asyncio.iscoroutine(value) or isinstance(value, asyncio.Future):
+        return await value
+    return value

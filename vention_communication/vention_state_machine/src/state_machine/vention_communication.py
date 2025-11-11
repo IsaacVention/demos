@@ -1,116 +1,148 @@
 from __future__ import annotations
-from typing import Optional, Sequence, List
-from pydantic import BaseModel
 
-from src.vention_communication import RpcBundle
+import inspect
+from typing import Optional, Sequence
 
+from src.vention_communication.entries import RpcBundle, ActionEntry
+from src.vention_communication.errors import ConnectError
+from vention_state_machine.src.state_machine.core import StateMachine
+from vention_state_machine.src.state_machine.router import (
+    StateResponse,
+    HistoryResponse,
+    HistoryEntry,
+    TriggerResponse,
+)
 
-# ---------- Pydantic models (for proto generation) ----------
+__all__ = ["build_state_machine_bundle"]
 
-class SMStateResponse(BaseModel):
-    state: str
-    last_state: str | None = None
-
-
-class SMHistoryEntry(BaseModel):
-    state: str
-    trigger: str | None = None
-
-
-class SMHistoryResponse(BaseModel):
-    history: List[SMHistoryEntry]
-
-
-class SMTriggerResponse(BaseModel):
-    result: str
-    previous_state: str
-    new_state: str
-
-
-# ---------- Bundle builder ----------
 
 def build_state_machine_bundle(
-    sm,
+    sm: StateMachine,
     *,
     include_state_actions: bool = True,
     include_history_action: bool = True,
     triggers: Optional[Sequence[str]] = None,
-) -> "RpcBundle":
+) -> RpcBundle:
     """
-    Build and return a unary-only RpcBundle exposing the given state machine.
-    The returned bundle can be passed to app.extend_bundle(bundle).
+    Build and return an RpcBundle exposing the given StateMachine instance.
 
-    Streams are intentionally *not* included in this first version.
+    The resulting bundle provides unary RPCs roughly equivalent to the REST
+    endpoints in `router.py`, including:
+
+      - GetState        → Current + last known state
+      - GetHistory      → Transition history (with duration_ms)
+      - Trigger<name>   → One RPC per state-machine trigger
+
+    Intended for integration via `app.extend_bundle(bundle)`.
     """
-    from src.vention_communication.entries import RpcBundle, ActionEntry
-
     bundle = RpcBundle()
 
-    # (1) GetState
+    # --------------------- GetState ---------------------
+
     if include_state_actions:
-        async def get_state() -> SMStateResponse:
-            return SMStateResponse(
+
+        async def get_state() -> StateResponse:
+            """Return the current and last known FSM state."""
+            return StateResponse(
                 state=sm.state,
                 last_state=getattr(sm, "get_last_state", lambda: None)(),
             )
 
-        bundle.actions.append(ActionEntry(
-            name="GetState",
-            func=get_state,
-            input_type=None,
-            output_type=SMStateResponse,
-        ))
+        bundle.actions.append(
+            ActionEntry(
+                name="GetState",
+                func=get_state,
+                input_type=None,
+                output_type=StateResponse,
+            )
+        )
 
-    # (2) GetHistory
+    # --------------------- GetHistory ---------------------
+
     if include_history_action:
-        async def get_history() -> SMHistoryResponse:
+
+        async def get_history() -> HistoryResponse:
+            """Return transition history with optional duration_ms values."""
             raw_hist = getattr(sm, "history", [])
-            entries = []
+            entries: list[HistoryEntry] = []
             for item in raw_hist:
+                # Flexible support for both dict-style and custom entries
                 if isinstance(item, dict):
-                    entries.append(SMHistoryEntry(
-                        state=str(item.get("state", "")),
-                        trigger=item.get("trigger"),
-                    ))
+                    entries.append(
+                        HistoryEntry(
+                            state=str(item.get("state", "")),
+                            trigger=item.get("trigger"),
+                            duration_ms=item.get("duration_ms"),
+                        )
+                    )
                 else:
-                    entries.append(SMHistoryEntry(state=str(item)))
-            return SMHistoryResponse(history=entries)
+                    # fallback: bare state name
+                    entries.append(HistoryEntry(state=str(item)))
+            return HistoryResponse(history=entries)
 
-        bundle.actions.append(ActionEntry(
-            name="GetHistory",
-            func=get_history,
-            input_type=None,
-            output_type=SMHistoryResponse,
-        ))
+        bundle.actions.append(
+            ActionEntry(
+                name="GetHistory",
+                func=get_history,
+                input_type=None,
+                output_type=HistoryResponse,
+            )
+        )
 
-    # (3) Triggers
+    # --------------------- Triggers ---------------------
+
     all_triggers = sorted(sm.events.keys())
     wanted = all_triggers if triggers is None else list(triggers)
 
     for trig in wanted:
-        async def trigger_call(name=trig) -> SMTriggerResponse:
+        rpc_name = f"Trigger_{trig[0].upper()}{trig[1:]}"  # Prefix + PascalCase
+
+        async def trigger_call(name: str = trig) -> TriggerResponse:
+            """Invoke a state-machine trigger safely with RPC-compatible errors."""
             current = sm.state
             available = sm.get_triggers(current)
+
             if name not in available:
-                raise RuntimeError(
-                    f"Trigger '{name}' not allowed from '{current}'. "
-                    f"Available: {sorted(available)}"
+                # Equivalent to HTTP 409 in REST router
+                raise ConnectError(
+                    code="failed_precondition",
+                    message=(
+                        f"Trigger '{name}' not allowed from '{current}'. "
+                        f"Available triggers: {sorted(available)}"
+                    ),
                 )
-            method = getattr(sm, name)
-            res = method()
-            if hasattr(res, "__await__"):
-                await res
-            return SMTriggerResponse(
+
+            try:
+                method = getattr(sm, name)
+            except AttributeError as e:
+                raise ConnectError(
+                    code="internal",
+                    message=f"Trigger method '{name}' not found on state machine",
+                ) from e
+
+            try:
+                result = method()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:
+                raise ConnectError(
+                    code="internal",
+                    message=f"Error executing trigger '{name}': {e}",
+                ) from e
+
+            return TriggerResponse(
                 result=name,
                 previous_state=current,
                 new_state=sm.state,
             )
 
-        bundle.actions.append(ActionEntry(
-            name=trig,
-            func=trigger_call,
-            input_type=None,
-            output_type=SMTriggerResponse,
-        ))
+        bundle.actions.append(
+            ActionEntry(
+                name=rpc_name,
+                func=trigger_call,
+                input_type=None,
+                output_type=TriggerResponse,
+            )
+        )
 
     return bundle
