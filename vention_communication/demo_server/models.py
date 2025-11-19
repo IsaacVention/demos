@@ -46,11 +46,11 @@ class Quiz(SQLModel, table=True):
     box_height: int = Field(description="Height of the box in millimeters")
     num_boxes: int = Field(description="Number of boxes in the problem")
     can_reach: Optional[bool] = Field(
-        default=None, 
+        default=False, 
         description="User's answer: whether the robot can reach all boxes"
     )
     correct: Optional[bool] = Field(
-        default=None, 
+        default=False, 
         description="Whether the user's answer was correct (auto-calculated)"
     )
     

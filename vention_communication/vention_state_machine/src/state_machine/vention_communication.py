@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import inspect
+from datetime import datetime
 from typing import Optional, Sequence
 
 from src.vention_communication.entries import RpcBundle, ActionEntry
 from src.vention_communication.errors import ConnectError
 from vention_state_machine.src.state_machine.core import StateMachine
-from vention_state_machine.src.state_machine.router import (
+from vention_state_machine.src.state_machine.utils import (
     StateResponse,
     HistoryResponse,
     HistoryEntry,
     TriggerResponse,
 )
+
 
 __all__ = ["build_state_machine_bundle"]
 
@@ -24,29 +26,26 @@ def build_state_machine_bundle(
     triggers: Optional[Sequence[str]] = None,
 ) -> RpcBundle:
     """
-    Build and return an RpcBundle exposing the given StateMachine instance.
+    Build and return an RpcBundle exposing a StateMachine instance.
 
-    The resulting bundle provides unary RPCs roughly equivalent to the REST
-    endpoints in `router.py`, including:
+    Provides unary RPCs:
 
-      - GetState        → Current + last known state
-      - GetHistory      → Transition history (with duration_ms)
-      - Trigger<name>   → One RPC per state-machine trigger
+      - GetState
+      - GetHistory
+      - Trigger_<TriggerName> (one per trigger)
 
-    Intended for integration via `app.extend_bundle(bundle)`.
+    For integration via app.extend_bundle(bundle).
     """
     bundle = RpcBundle()
 
-    # --------------------- GetState ---------------------
-
+    # ======================================================
+    # GetState
+    # ======================================================
     if include_state_actions:
 
         async def get_state() -> StateResponse:
-            """Return the current and last known FSM state."""
-            return StateResponse(
-                state=sm.state,
-                last_state=getattr(sm, "get_last_state", lambda: None)(),
-            )
+            last = getattr(sm, "get_last_state", lambda: None)()
+            return StateResponse(state=sm.state, last_state=last)
 
         bundle.actions.append(
             ActionEntry(
@@ -57,28 +56,39 @@ def build_state_machine_bundle(
             )
         )
 
-    # --------------------- GetHistory ---------------------
-
+    # ======================================================
+    # GetHistory
+    # ======================================================
     if include_history_action:
 
         async def get_history() -> HistoryResponse:
-            """Return transition history with optional duration_ms values."""
-            raw_hist = getattr(sm, "history", [])
-            entries: list[HistoryEntry] = []
-            for item in raw_hist:
-                # Flexible support for both dict-style and custom entries
+            raw = getattr(sm, "history", [])
+            out = []
+
+            for item in raw:
                 if isinstance(item, dict):
-                    entries.append(
-                        HistoryEntry(
-                            state=str(item.get("state", "")),
-                            trigger=item.get("trigger"),
-                            duration_ms=item.get("duration_ms"),
-                        )
-                    )
+                    # Handle dict items from history
+                    entry_data = {
+                        "state": str(item.get("state", "")),
+                        "duration_ms": item.get("duration_ms"),
+                    }
+                    # Add timestamp if present, otherwise use current time
+                    if "timestamp" in item:
+                        entry_data["timestamp"] = item["timestamp"]
+                    else:
+                        entry_data["timestamp"] = datetime.now()
+                    out.append(HistoryEntry(**entry_data))
                 else:
-                    # fallback: bare state name
-                    entries.append(HistoryEntry(state=str(item)))
-            return HistoryResponse(history=entries)
+                    # Handle simple state strings
+                    out.append(HistoryEntry(
+                        state=str(item),
+                        timestamp=datetime.now()
+                    ))
+
+            return HistoryResponse(
+                history=out,
+                buffer_size=len(raw)
+            )
 
         bundle.actions.append(
             ActionEntry(
@@ -89,37 +99,39 @@ def build_state_machine_bundle(
             )
         )
 
-    # --------------------- Triggers ---------------------
-
+    # ======================================================
+    # Triggers
+    # ======================================================
+    # Source of truth: transitions registered on SM
     all_triggers = sorted(sm.events.keys())
-    wanted = all_triggers if triggers is None else list(triggers)
+    selected = all_triggers if triggers is None else list(triggers)
 
-    for trig in wanted:
-        rpc_name = f"Trigger_{trig[0].upper()}{trig[1:]}"  # Prefix + PascalCase
-
-        async def trigger_call(name: str = trig) -> TriggerResponse:
-            """Invoke a state-machine trigger safely with RPC-compatible errors."""
+    # ---------- factory function (fixes closure bug) ----------
+    def make_trigger_handler(trigger_name: str):
+        async def trigger_call() -> TriggerResponse:
             current = sm.state
-            available = sm.get_triggers(current)
+            allowed = sm.get_triggers(current)
 
-            if name not in available:
-                # Equivalent to HTTP 409 in REST router
+            # Precondition error if invalid in current state
+            if trigger_name not in allowed:
                 raise ConnectError(
                     code="failed_precondition",
                     message=(
-                        f"Trigger '{name}' not allowed from '{current}'. "
-                        f"Available triggers: {sorted(available)}"
+                        f"Trigger '{trigger_name}' cannot run from '{current}'. "
+                        f"Allowed: {sorted(allowed)}"
                     ),
                 )
 
+            # Fetch bound trigger method
             try:
-                method = getattr(sm, name)
+                method = getattr(sm, trigger_name)
             except AttributeError as e:
                 raise ConnectError(
                     code="internal",
-                    message=f"Trigger method '{name}' not found on state machine",
+                    message=f"StateMachine missing trigger '{trigger_name}'",
                 ) from e
 
+            # Execute trigger (sync or async)
             try:
                 result = method()
                 if inspect.isawaitable(result):
@@ -127,19 +139,26 @@ def build_state_machine_bundle(
             except Exception as e:
                 raise ConnectError(
                     code="internal",
-                    message=f"Error executing trigger '{name}': {e}",
+                    message=f"Trigger '{trigger_name}' failed: {e}",
                 ) from e
 
             return TriggerResponse(
-                result=name,
+                result=trigger_name,
                 previous_state=current,
                 new_state=sm.state,
             )
 
+        return trigger_call
+
+    # ---------- register each trigger ----------
+    for trig in selected:
+        rpc_name = f"Trigger_{trig[0].upper()}{trig[1:]}"  # PascalCase RPC names
+        handler = make_trigger_handler(trig)
+
         bundle.actions.append(
             ActionEntry(
                 name=rpc_name,
-                func=trigger_call,
+                func=handler,
                 input_type=None,
                 output_type=TriggerResponse,
             )

@@ -1,35 +1,10 @@
 import asyncio
 from datetime import datetime
-from typing import Optional, Sequence, Union, cast
+from typing import Optional, Sequence, Union
 from fastapi import APIRouter, HTTPException, Response, status
-from typing_extensions import TypedDict, NotRequired
 from vention_state_machine.src.state_machine.core import StateMachine
 from vention_state_machine.src.state_machine.defs import Trigger
-
-
-# ----------- TypedDict response models -----------
-
-
-class StateResponse(TypedDict):
-    state: str
-    last_state: Optional[str]
-
-
-class HistoryEntry(TypedDict):
-    timestamp: datetime
-    state: str
-    duration_ms: NotRequired[int]
-
-
-class HistoryResponse(TypedDict):
-    history: list[HistoryEntry]
-    buffer_size: int
-
-
-class TriggerResponse(TypedDict):
-    result: str
-    previous_state: str
-    new_state: str
+from vention_state_machine.src.state_machine.utils import StateResponse, HistoryResponse, TriggerResponse, HistoryEntry
 
 
 # ----------- Router setup -----------
@@ -64,10 +39,10 @@ def _register_basic_routes(router: APIRouter, state_machine: StateMachine) -> No
     @router.get("/state", response_model=StateResponse)
     def get_state() -> StateResponse:
         """Return current and last known state."""
-        return {
-            "state": state_machine.state,
-            "last_state": state_machine.get_last_state(),
-        }
+        return StateResponse(
+            state=state_machine.state,
+            last_state=state_machine.get_last_state(),
+        )
 
     @router.get("/history", response_model=HistoryResponse)
     def get_history(last_n_entries: Optional[int] = None) -> HistoryResponse:
@@ -83,10 +58,30 @@ def _register_basic_routes(router: APIRouter, state_machine: StateMachine) -> No
                 if last_n_entries is not None
                 else state_machine.history
             )
-        return {
-            "history": cast(list[HistoryEntry], data),
-            "buffer_size": len(state_machine.history),
-        }
+        
+        # Convert history items to HistoryEntry models
+        entries = []
+        for item in data:
+            if isinstance(item, dict):
+                entry_data = {
+                    "state": str(item.get("state", "")),
+                    "duration_ms": item.get("duration_ms"),
+                }
+                if "timestamp" in item:
+                    entry_data["timestamp"] = item["timestamp"]
+                else:
+                    entry_data["timestamp"] = datetime.now()
+                entries.append(HistoryEntry(**entry_data))
+            else:
+                entries.append(HistoryEntry(
+                    state=str(item),
+                    timestamp=datetime.now()
+                ))
+        
+        return HistoryResponse(
+            history=entries,
+            buffer_size=len(state_machine.history),
+        )
 
     @router.get("/diagram.svg", response_class=Response)
     def get_svg() -> Response:
@@ -155,11 +150,11 @@ def _add_trigger_route(
             if asyncio.iscoroutine(result):
                 await result
 
-            return {
-                "result": trigger,
-                "previous_state": previous_state,
-                "new_state": state_machine.state,
-            }
+            return TriggerResponse(
+                result=trigger,
+                previous_state=previous_state,
+                new_state=state_machine.state,
+            )
 
         except AttributeError:
             raise HTTPException(

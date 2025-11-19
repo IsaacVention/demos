@@ -6,7 +6,7 @@ from .typing_utils import is_pydantic_model
 from .entries import RpcBundle, StreamEntry
 
 _SCALAR_MAP = {
-    int: "int64",
+    int: "int32",
     float: "double",
     str: "string",
     bool: "bool",

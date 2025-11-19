@@ -1,8 +1,8 @@
 from __future__ import annotations
 import inspect
-from typing import Any, Optional, Type, get_type_hints, cast
+from typing import Any, Callable, Optional, Type, get_type_hints, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class TypingError(Exception):
@@ -18,7 +18,7 @@ def _strip_self(params: list[inspect.Parameter]) -> list[inspect.Parameter]:
     return params
 
 
-def infer_input_type(function: Any) -> Optional[Type[Any]]:
+def infer_input_type(function: Callable[..., Any]) -> Optional[Type[Any]]:
     """Infer the input type annotation from a function's first parameter.
 
     Args:
@@ -50,7 +50,7 @@ def infer_input_type(function: Any) -> Optional[Type[Any]]:
     return None
 
 
-def infer_output_type(function: Any) -> Optional[Type[Any]]:
+def infer_output_type(function: Callable[..., Any]) -> Optional[Type[Any]]:
     """Infer the return type annotation from a function.
 
     Args:
@@ -88,3 +88,36 @@ def is_pydantic_model(type_annotation: Any) -> bool:
         )
     except Exception:
         return False
+
+
+def camelize(name: str) -> str:
+    parts = name.split("_")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
+def apply_aliases(model_cls: Type[BaseModel]) -> None:
+    # Ensure Pydantic accepts both snake_case and camelCase
+    existing_config = getattr(model_cls, "model_config", None)
+    if existing_config is None:
+        existing_dict: dict[str, Any] = {}
+    else:
+        existing_dict = (
+            dict(existing_config) if isinstance(existing_config, dict) else {}
+        )
+
+    merged_config: dict[str, Any] = {
+        "populate_by_name": True,
+        "from_attributes": True,
+        **existing_dict,
+    }
+    model_cls.model_config = cast(ConfigDict, merged_config)
+
+    # Force rebuild first to ensure model is in a consistent state
+    model_cls.model_rebuild(force=True)
+
+    # Set aliases AFTER rebuild, as rebuild recreates fields from annotations
+    fields = model_cls.model_fields
+    for name, field in fields.items():
+        alias = camelize(name)
+        field.alias = alias
+        field.validation_alias = alias

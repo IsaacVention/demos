@@ -90,6 +90,7 @@ def validate_quiz_answer(_, instance: Quiz):
 
 @stream(name="state_change", payload=StateChangeEvent, queue_maxsize=10, replay=True, policy="fifo")
 async def publish_state_change(old_state: str, new_state: str, trigger: str) -> StateChangeEvent:
+    print(f"Publishing state change: {old_state} -> {new_state} (trigger: {trigger})")
     return StateChangeEvent(old_state=old_state, new_state=new_state, trigger=trigger)
 
 # -------------------------------

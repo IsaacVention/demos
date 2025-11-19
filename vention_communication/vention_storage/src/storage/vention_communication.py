@@ -1,9 +1,7 @@
 from __future__ import annotations
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Type
 
 from pydantic import BaseModel, create_model
-from fastapi.encoders import jsonable_encoder
 
 from src.vention_communication.entries import RpcBundle, ActionEntry
 from src.vention_communication.errors import ConnectError
@@ -21,7 +19,7 @@ from vention_storage.src.storage.services.database_service import (
     DatabaseService,
     DatabaseError,
 )
-from vention_storage.src.storage.utils import Operation
+from vention_storage.src.storage.utils import parse_audit_operation, parse_audit_datetime
 
 
 __all__ = ["build_storage_bundle"]
@@ -29,6 +27,7 @@ __all__ = ["build_storage_bundle"]
 
 # ---------------------------------------------------------
 # Shared Pydantic models for RPC I/O
+# (camelCase aliases applied automatically by registry)
 # ---------------------------------------------------------
 
 
@@ -39,17 +38,6 @@ class CrudListRequest(BaseModel):
 class CrudGetRequest(BaseModel):
     record_id: int
     include_deleted: bool = False
-
-
-class CrudCreateRequest(BaseModel):
-    payload: Dict[str, Any]
-    actor: str
-
-
-class CrudUpdateRequest(BaseModel):
-    record_id: int
-    payload: Dict[str, Any]
-    actor: str
 
 
 class CrudDeleteRequest(BaseModel):
@@ -79,6 +67,85 @@ class FileResponse(BaseModel):
 
 
 # ---------------------------------------------------------
+# Helpers: Dynamic, strongly-typed models per SQLModel
+# ---------------------------------------------------------
+
+
+def make_list_response_model(model_cls: Type[Any], name: str) -> Type[BaseModel]:
+    """
+    <Name>ListResponse { records: List[model_cls] }
+    """
+    return create_model(
+        f"{name}ListResponse",
+        records=(List[model_cls], ...),
+        __base__=BaseModel,
+    )
+
+
+def make_single_response_model(
+    model_cls: Type[Any],
+    name: str,
+    field_name: str = "record",
+) -> Type[BaseModel]:
+    """
+    <Name>Response { <field_name>: model_cls }
+    """
+    return create_model(
+        f"{name}Response",
+        **{field_name: (model_cls, ...)},
+        __base__=BaseModel,
+    )
+
+
+def make_status_response_model(name: str) -> Type[BaseModel]:
+    """
+    <Name>StatusResponse { status: str }
+    """
+    return create_model(
+        f"{name}StatusResponse",
+        status=(str, ...),
+        __base__=BaseModel,
+    )
+
+
+def make_create_request_model(model_cls: Type[Any], name: str) -> Type[BaseModel]:
+    """
+    <Name>CreateRequest { record: model_cls, actor: str }
+    """
+    return create_model(
+        f"{name}CreateRequest",
+        record=(model_cls, ...),
+        actor=(str, ...),
+        __base__=BaseModel,
+    )
+
+
+def make_update_request_model(model_cls: Type[Any], name: str) -> Type[BaseModel]:
+    """
+    <Name>UpdateRequest { recordId: int, record: model_cls, actor: str }
+    """
+    return create_model(
+        f"{name}UpdateRequest",
+        record_id=(int, ...),
+        record=(model_cls, ...),
+        actor=(str, ...),
+        __base__=BaseModel,
+    )
+
+
+def make_dict_list_response_model(name: str) -> Type[BaseModel]:
+    """
+    <Name>ListResponse { records: List[Dict[str, Any]] }
+    Used for audit rows etc.
+    """
+    return create_model(
+        f"{name}ListResponse",
+        records=(List[Dict[str, Any]], ...),
+        __base__=BaseModel,
+    )
+
+
+# ---------------------------------------------------------
 # Bundle builder
 # ---------------------------------------------------------
 
@@ -99,26 +166,33 @@ def build_storage_bundle(
     bundle = RpcBundle()
 
     # -----------------------------------------------------
-    # Per-model CRUD actions
+    # Per-model CRUD actions (typed per model)
     # -----------------------------------------------------
     for accessor in accessors:
-        crud = CrudService(accessor, max_records=max_records_per_model)
+        model_cls = accessor.model
         model_name = accessor.component.capitalize()
-        model_cls: Type[BaseModel] = accessor.model
 
-        # Dynamically create a typed list wrapper for the model
-        ListResponse = create_model(
-            f"{model_name}ListResponse",
-            records=(List[model_cls], ...),
-        )
+        crud = CrudService(accessor, max_records=max_records_per_model)
 
-        # ---------- LIST ----------
+        # -------- Typed request/response models for this model --------
+        ListResponse = make_list_response_model(model_cls, model_name)
+        GetResponse = make_single_response_model(model_cls, f"{model_name}Get")
+        CreateRequest = make_create_request_model(model_cls, model_name)
+        CreateResponse = make_single_response_model(model_cls, f"{model_name}Create")
+        UpdateRequest = make_update_request_model(model_cls, model_name)
+        UpdateResponse = make_single_response_model(model_cls, f"{model_name}Update")
+        DeleteResponse = make_status_response_model(model_name)
+        RestoreResponse = make_single_response_model(model_cls, f"{model_name}Restore")
+
+        # ---------------- List ----------------
         async def list_records(
-            req: CrudListRequest, _crud: CrudService = crud
-        ) -> ListResponse:
+            req: CrudListRequest,
+            _crud: CrudService = crud,
+            _Resp: Type[BaseModel] = ListResponse,
+        ) -> BaseModel:
             try:
-                records = _crud.list_records(include_deleted=req.include_deleted)
-                return ListResponse(records=jsonable_encoder(records))
+                records = list(_crud.list_records(include_deleted=req.include_deleted))
+                return _Resp(records=records)
             except CrudError as e:
                 raise _to_rpc(e)
 
@@ -127,17 +201,21 @@ def build_storage_bundle(
                 name=f"{model_name}_ListRecords",
                 func=list_records,
                 input_type=CrudListRequest,
-                output_type=ListResponse,  # ✅ typed
+                output_type=ListResponse,
             )
         )
 
-        # ---------- GET ----------
-        async def get_record(req: CrudGetRequest, _crud: CrudService = crud) -> model_cls:
+        # ---------------- Get ----------------
+        async def get_record(
+            req: CrudGetRequest,
+            _crud: CrudService = crud,
+            _Resp: Type[BaseModel] = GetResponse,
+        ) -> BaseModel:
             try:
-                record = _crud.get_record(
+                rec = _crud.get_record(
                     req.record_id, include_deleted=req.include_deleted
                 )
-                return jsonable_encoder(record)
+                return _Resp(record=rec)
             except CrudError as e:
                 raise _to_rpc(e)
 
@@ -146,17 +224,21 @@ def build_storage_bundle(
                 name=f"{model_name}_GetRecord",
                 func=get_record,
                 input_type=CrudGetRequest,
-                output_type=model_cls,  # ✅ typed
+                output_type=GetResponse,
             )
         )
 
-        # ---------- CREATE ----------
+        # ---------------- Create ----------------
         async def create_record(
-            req: CrudCreateRequest, _crud: CrudService = crud
-        ) -> model_cls:
+            req: CreateRequest,
+            _crud: CrudService = crud,
+            _Resp: Type[BaseModel] = CreateResponse,
+        ) -> BaseModel:
             try:
-                record = _crud.create_record(req.payload, req.actor)
-                return jsonable_encoder(record)
+                # record is a typed Pydantic model → dump to dict for CrudService
+                payload = req.record.model_dump(exclude_unset=True, by_alias=False)
+                rec = _crud.create_record(payload, req.actor)
+                return _Resp(record=rec)
             except CrudError as e:
                 raise _to_rpc(e)
 
@@ -164,18 +246,21 @@ def build_storage_bundle(
             ActionEntry(
                 name=f"{model_name}_CreateRecord",
                 func=create_record,
-                input_type=CrudCreateRequest,
-                output_type=model_cls,
+                input_type=CreateRequest,
+                output_type=CreateResponse,
             )
         )
 
-        # ---------- UPDATE ----------
+        # ---------------- Update ----------------
         async def update_record(
-            req: CrudUpdateRequest, _crud: CrudService = crud
-        ) -> model_cls:
+            req: UpdateRequest,
+            _crud: CrudService = crud,
+            _Resp: Type[BaseModel] = UpdateResponse,
+        ) -> BaseModel:
             try:
-                record = _crud.update_record(req.record_id, req.payload, req.actor)
-                return jsonable_encoder(record)
+                payload = req.record.model_dump(exclude_unset=True, by_alias=False)
+                rec = _crud.update_record(req.record_id, payload, req.actor)
+                return _Resp(record=rec)
             except CrudError as e:
                 raise _to_rpc(e)
 
@@ -183,18 +268,20 @@ def build_storage_bundle(
             ActionEntry(
                 name=f"{model_name}_UpdateRecord",
                 func=update_record,
-                input_type=CrudUpdateRequest,
-                output_type=model_cls,
+                input_type=UpdateRequest,
+                output_type=UpdateResponse,
             )
         )
 
-        # ---------- DELETE ----------
+        # ---------------- Delete ----------------
         async def delete_record(
-            req: CrudDeleteRequest, _crud: CrudService = crud
-        ) -> Dict[str, str]:
+            req: CrudDeleteRequest,
+            _crud: CrudService = crud,
+            _Resp: Type[BaseModel] = DeleteResponse,
+        ) -> BaseModel:
             try:
                 _crud.delete_record(req.record_id, req.actor)
-                return {"status": "deleted"}
+                return _Resp(status="deleted")
             except CrudError as e:
                 raise _to_rpc(e)
 
@@ -203,17 +290,19 @@ def build_storage_bundle(
                 name=f"{model_name}_DeleteRecord",
                 func=delete_record,
                 input_type=CrudDeleteRequest,
-                output_type=Dict[str, str],
+                output_type=DeleteResponse,
             )
         )
 
-        # ---------- RESTORE ----------
+        # ---------------- Restore ----------------
         async def restore_record(
-            req: CrudRestoreRequest, _crud: CrudService = crud
-        ) -> model_cls:
+            req: CrudRestoreRequest,
+            _crud: CrudService = crud,
+            _Resp: Type[BaseModel] = RestoreResponse,
+        ) -> BaseModel:
             try:
-                record = _crud.restore_record(req.record_id, req.actor)
-                return jsonable_encoder(record)
+                rec = _crud.restore_record(req.record_id, req.actor)
+                return _Resp(record=rec)
             except CrudError as e:
                 raise _to_rpc(e)
 
@@ -222,7 +311,7 @@ def build_storage_bundle(
                 name=f"{model_name}_RestoreRecord",
                 func=restore_record,
                 input_type=CrudRestoreRequest,
-                output_type=model_cls,
+                output_type=RestoreResponse,
             )
         )
 
@@ -232,9 +321,14 @@ def build_storage_bundle(
     if enable_db_actions:
         db = DatabaseService()
 
-        async def health() -> Dict[str, str]:
+        # ---- Health ----
+        class HealthResponse(BaseModel):
+            status: str
+
+        async def health() -> HealthResponse:
             try:
-                return jsonable_encoder(db.health())
+                res = db.health()
+                return HealthResponse(status=res.get("status", "ok"))
             except DatabaseError as e:
                 raise _to_rpc(e)
 
@@ -243,46 +337,32 @@ def build_storage_bundle(
                 name="Database_Health",
                 func=health,
                 input_type=None,
-                output_type=Dict[str, str],
+                output_type=HealthResponse,
             )
         )
 
-        async def audit(req: AuditQueryRequest) -> Dict[str, Any]:
+        # ---- Audit ----
+        AuditListResponse = make_dict_list_response_model("Audit")
+
+        async def audit(req: AuditQueryRequest) -> AuditListResponse:
             try:
-                operation: Optional[Operation] = None
-                if req.operation is not None:
-                    if req.operation not in (
-                        "create",
-                        "update",
-                        "delete",
-                        "soft_delete",
-                        "restore",
-                    ):
-                        raise ValueError(f"Invalid operation: {req.operation}")
-                    operation = req.operation  # type: ignore
+                operation_op = parse_audit_operation(req.operation)
+                since_dt = parse_audit_datetime(req.since)
+                until_dt = parse_audit_datetime(req.until)
 
-                since_dt = (
-                    datetime.fromisoformat(req.since.replace("Z", "+00:00"))
-                    if req.since
-                    else None
+                results = list(
+                    db.read_audit(
+                        component=req.component,
+                        record_id=req.record_id,
+                        actor=req.actor,
+                        operation=operation_op,
+                        since=since_dt,
+                        until=until_dt,
+                        limit=req.limit,
+                        offset=req.offset,
+                    )
                 )
-                until_dt = (
-                    datetime.fromisoformat(req.until.replace("Z", "+00:00"))
-                    if req.until
-                    else None
-                )
-
-                results = db.read_audit(
-                    component=req.component,
-                    record_id=req.record_id,
-                    actor=req.actor,
-                    operation=operation,
-                    since=since_dt,
-                    until=until_dt,
-                    limit=req.limit,
-                    offset=req.offset,
-                )
-                return {"records": jsonable_encoder(results)}
+                return AuditListResponse(records=results)
             except DatabaseError as e:
                 raise _to_rpc(e)
 
@@ -291,10 +371,11 @@ def build_storage_bundle(
                 name="Database_ReadAudit",
                 func=audit,
                 input_type=AuditQueryRequest,
-                output_type=Dict[str, Any],
+                output_type=AuditListResponse,
             )
         )
 
+        # ---- Export zip ----
         async def export_zip() -> FileResponse:
             try:
                 data = db.export_zip()
@@ -311,6 +392,7 @@ def build_storage_bundle(
             )
         )
 
+        # ---- Backup sqlite ----
         async def backup_sqlite() -> FileResponse:
             try:
                 result = db.backup_sqlite()
@@ -327,22 +409,26 @@ def build_storage_bundle(
             )
         )
 
+        # ---- Restore sqlite ----
         class RestoreRequest(BaseModel):
             bytes: bytes
             filename: Optional[str] = "upload.sqlite"
             integrity_check: bool = True
             dry_run: bool = False
 
-        async def restore_sqlite(req: RestoreRequest) -> Dict[str, Any]:
+        class RestoreResponse(BaseModel):
+            ok: bool
+            message: Optional[str] = None
+
+        async def restore_sqlite(req: RestoreRequest) -> RestoreResponse:
             try:
-                return jsonable_encoder(
-                    db.restore_sqlite(
-                        file_bytes=req.bytes,
-                        filename=req.filename or "upload.sqlite",
-                        integrity_check=req.integrity_check,
-                        dry_run=req.dry_run,
-                    )
+                result = db.restore_sqlite(
+                    file_bytes=req.bytes,
+                    filename=req.filename or "upload.sqlite",
+                    integrity_check=req.integrity_check,
+                    dry_run=req.dry_run,
                 )
+                return RestoreResponse(**result)
             except DatabaseError as e:
                 raise _to_rpc(e)
 
@@ -351,7 +437,7 @@ def build_storage_bundle(
                 name="Database_RestoreSqlite",
                 func=restore_sqlite,
                 input_type=RestoreRequest,
-                output_type=Dict[str, Any],
+                output_type=RestoreResponse,
             )
         )
 
@@ -379,7 +465,9 @@ def _to_rpc(exc: Exception) -> ConnectError:
             "VALIDATION_ERROR": "invalid_argument",
             "OPERATIONAL_ERROR": "internal",
         }
-        return ConnectError(code=mapping.get(exc.code, "internal"), message=str(exc))
+        return ConnectError(
+            code=mapping.get(exc.code, "internal"), message=str(exc)
+        )
     if isinstance(exc, CrudError):
         return ConnectError(code="internal", message=str(exc))
     return ConnectError(code="internal", message=str(exc))

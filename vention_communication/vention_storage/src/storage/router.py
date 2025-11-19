@@ -1,5 +1,4 @@
 from __future__ import annotations
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import (
@@ -27,7 +26,7 @@ from vention_storage.src.storage.services.database_service import (
     DatabaseService,
     DatabaseError,
 )
-from storage.utils import Operation
+from vention_storage.src.storage.utils import parse_audit_operation, parse_audit_datetime
 
 
 __all__ = ["build_router"]
@@ -105,11 +104,12 @@ def build_router(
             actor: str = Depends(get_actor),
         ) -> Any:
             try:
+                # Check if record exists before update to determine status code
+                existed = crud.accessor.get(record_id, include_deleted=True) is not None
                 obj: Any = crud.update_record(record_id, payload, actor)
-                # If new record was created, emulate 201 Created
-                if not crud.accessor.get(record_id, include_deleted=True):
-                    if response is not None:
-                        response.status_code = status.HTTP_201_CREATED
+                # If new record was created, return 201 Created
+                if not existed and response is not None:
+                    response.status_code = status.HTTP_201_CREATED
                 return obj
             except CrudError as e:
                 raise _to_http(e)
@@ -124,10 +124,10 @@ def build_router(
             except CrudError as e:
                 raise _to_http(e)
 
-        @sub.post("/{record_id}/restore")
+        @sub.post("/{record_id}/restore", response_model=accessor.model)
         def restore_record(
             record_id: int, actor: str = Depends(get_actor)
-        ) -> Dict[str, Any]:
+        ) -> Any:
             try:
                 return crud.restore_record(record_id, actor)
             except CrudError as e:
@@ -161,26 +161,9 @@ def build_router(
             offset: int = Query(0),
         ) -> List[Any]:
             try:
-                # Convert string types to proper types
-                operation_op: Optional[Operation] = None
-                if operation is not None:
-                    if operation not in (
-                        "create",
-                        "update",
-                        "delete",
-                        "soft_delete",
-                        "restore",
-                    ):
-                        raise ValueError(f"Invalid operation: {operation}")
-                    operation_op = operation  # type: ignore
-
-                since_dt: Optional[datetime] = None
-                if since is not None:
-                    since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-
-                until_dt: Optional[datetime] = None
-                if until is not None:
-                    until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+                operation_op = parse_audit_operation(operation)
+                since_dt = parse_audit_datetime(since)
+                until_dt = parse_audit_datetime(until)
 
                 return db.read_audit(
                     component=component,

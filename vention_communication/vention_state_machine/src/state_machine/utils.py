@@ -1,4 +1,6 @@
-from typing import Any, Callable, Union
+from datetime import datetime
+from typing import Any, Callable, Optional, Union
+from pydantic import BaseModel
 from vention_state_machine.src.state_machine.defs import StateGroup
 
 
@@ -54,3 +56,27 @@ def is_state_container(state_source: object) -> bool:
         )
     except TypeError:
         return False
+
+
+# Shared schema definitions for REST and RPC endpoints
+# (camelCase aliases applied automatically by registry)
+class StateResponse(BaseModel):
+    state: str
+    last_state: Optional[str] = None
+
+
+class HistoryEntry(BaseModel):
+    timestamp: datetime
+    state: str
+    duration_ms: Optional[int] = None
+
+
+class HistoryResponse(BaseModel):
+    history: list[HistoryEntry]
+    buffer_size: int
+
+
+class TriggerResponse(BaseModel):
+    result: str
+    previous_state: str
+    new_state: str

@@ -134,8 +134,12 @@ class CrudService:
         if not ok:
             raise NotFoundError()
 
-    def restore_record(self, record_id: int, actor: str) -> Dict[str, Any]:
-        """Restore a soft-deleted record (if supported)."""
+    def restore_record(self, record_id: int, actor: str) -> ModelType:  # type: ignore[type-var]
+        """Restore a soft-deleted record (if supported).
+        
+        Returns the restored model instance. If the record was already
+        not deleted, returns it unchanged.
+        """
         model_cls = self.accessor.model
         if not hasattr(model_cls, "deleted_at"):
             raise UnsupportedError(
@@ -147,8 +151,12 @@ class CrudService:
             raise NotFoundError()
 
         if getattr(obj, "deleted_at") is None:
-            # already restored
-            return {"status": "ok", "restored": False}
+            # already restored, return as-is
+            return obj
 
         self.accessor.restore(record_id, actor=actor)
-        return {"status": "ok", "restored": True}
+        # Fetch the restored record to return it
+        restored = self.accessor.get(record_id, include_deleted=False)
+        if not restored:
+            raise NotFoundError("Record not found after restore")
+        return restored

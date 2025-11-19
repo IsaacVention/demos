@@ -4,10 +4,12 @@ import json
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from sqlmodel import SQLModel   # <-- NEW for SQLModel serialization
 
 from .entries import ActionEntry, StreamEntry
 from .errors import error_envelope, to_connect_error
@@ -17,17 +19,46 @@ logger = logging.getLogger(__name__)
 CONTENT_TYPE = "application/connect+json"
 
 
+# ============================================================
+# Helper: Convert Python → JSON-safe (supports SQLModel, Pydantic, lists, dicts)
+# ============================================================
+
+def _to_serializable(obj: Any) -> Any:
+    """Normalize any Python object into JSON-safe data with aliasing."""
+    # SQLModel (ORM objects)
+    if isinstance(obj, SQLModel):
+        return obj.model_dump(by_alias=True)
+
+    # Pydantic models
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(by_alias=True)
+
+    # list or tuple
+    if isinstance(obj, (list, tuple)):
+        return [_to_serializable(x) for x in obj]
+
+    # dict
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+
+    # passthrough primitive types
+    return obj
+
+
+# ============================================================
+# Connect JSON framing for streams
+# ============================================================
+
 def _frame(payload: Dict[str, Any], *, trailer: bool = False) -> bytes:
-    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     flag = 0x80 if trailer else 0x00
     header = bytes([flag]) + len(body).to_bytes(4, byteorder="big", signed=False)
     return header + body
 
 
-# ---------- Subscriber ----------
-
+# ============================================================
+# Subscriber
+# ============================================================
 
 @dataclass(eq=False, unsafe_hash=True)
 class _Subscriber:
@@ -36,18 +67,15 @@ class _Subscriber:
     last_send_at: float = field(default_factory=lambda: time.time())
 
 
+# ============================================================
+# Stream Manager — fan-out with policies
+# ============================================================
+
 class StreamManager:
-    """Topic-oriented fan-out with a distributor task per stream.
-
-    Supports configurable delivery policies: "latest" (drops old items when queue is full)
-    or "fifo" (waits for space to ensure all items are delivered).
-    """
-
     def __init__(self) -> None:
         self._topics: Dict[str, Dict[str, Any]] = {}
 
     def ensure_topic(self, entry: StreamEntry) -> None:
-        """Create a topic if it doesn't exist (synchronous, safe before loop)."""
         if entry.name in self._topics:
             return
 
@@ -62,7 +90,6 @@ class StreamManager:
         }
         self._topics[entry.name] = topic
 
-        # If an event loop is running, start distributor immediately
         try:
             loop = asyncio.get_running_loop()
             topic["task"] = loop.create_task(self._distributor(entry.name))
@@ -70,11 +97,6 @@ class StreamManager:
             pass
 
     def start_distributor_if_needed(self, stream_name: str) -> None:
-        """Start the distributor task if it doesn't exist or has completed.
-
-        Args:
-            stream_name: Name of the stream topic
-        """
         topic = self._topics[stream_name]
         if topic["task"] is None or topic["task"].done():
             try:
@@ -84,23 +106,9 @@ class StreamManager:
             topic["task"] = loop.create_task(self._distributor(stream_name))
 
     def add_stream(self, entry: StreamEntry) -> None:
-        """Register a stream entry and ensure its topic exists.
-
-        Args:
-            entry: Stream entry to register
-        """
         self.ensure_topic(entry)
 
     def publish(self, stream_name: str, item: Any) -> None:
-        """Publish an item to a stream topic.
-
-        Args:
-            stream_name: Name of the stream topic
-            item: Item to publish
-
-        Raises:
-            KeyError: If the stream topic doesn't exist
-        """
         topic = self._topics.get(stream_name)
         if topic is None:
             raise KeyError(f"Unknown stream: {stream_name}")
@@ -108,19 +116,9 @@ class StreamManager:
         topic["publish_queue"].put_nowait(item)
 
     def subscribe(self, stream_name: str) -> _Subscriber:
-        """Subscribe to a stream topic and return a subscriber.
-
-        If replay is enabled, the last published value will be enqueued
-        for the new subscriber.
-
-        Args:
-            stream_name: Name of the stream topic
-
-        Returns:
-            A subscriber instance with its own queue
-        """
         topic = self._topics[stream_name]
         entry: StreamEntry = topic["entry"]
+
         subscriber_queue: asyncio.Queue[Any] = asyncio.Queue(
             maxsize=entry.queue_maxsize
         )
@@ -137,12 +135,6 @@ class StreamManager:
         return subscriber
 
     def unsubscribe(self, stream_name: str, subscriber: _Subscriber) -> None:
-        """Remove a subscriber from a stream topic.
-
-        Args:
-            stream_name: Name of the stream topic
-            subscriber: Subscriber to remove
-        """
         topic = self._topics.get(stream_name)
         if topic:
             topic["subscribers"].discard(subscriber)
@@ -155,51 +147,51 @@ class StreamManager:
         while True:
             item = await publish_queue.get()
             topic["last_value"] = item
-            dead_subscribers: list[_Subscriber] = []
+            dead: List[_Subscriber] = []
             entry: StreamEntry = topic["entry"]
 
-            for subscriber in list(subscribers):
+            for sub in list(subscribers):
                 try:
                     if entry.policy == "fifo":
-                        await subscriber.queue.put(item)
+                        await sub.queue.put(item)
                     else:
-                        subscriber.queue.put_nowait(item)
+                        sub.queue.put_nowait(item)
                 except asyncio.QueueFull:
                     try:
-                        _ = subscriber.queue.get_nowait()
+                        _ = sub.queue.get_nowait()
                     except Exception:
                         pass
                     try:
-                        subscriber.queue.put_nowait(item)
+                        sub.queue.put_nowait(item)
                     except Exception:
-                        dead_subscribers.append(subscriber)
+                        dead.append(sub)
 
-            for dead_subscriber in dead_subscribers:
-                subscribers.discard(dead_subscriber)
+            for d in dead:
+                subscribers.discard(d)
 
+
+# ============================================================
+# ConnectRouter — unary + streaming RPCs
+# ============================================================
 
 class ConnectRouter:
-    """Router for Connect-style RPC endpoints."""
-
     def __init__(self) -> None:
-        """Initialize the ConnectRouter with empty registries."""
         self.router = APIRouter()
         self._unaries: Dict[str, ActionEntry] = {}
         self._streams: Dict[str, StreamEntry] = {}
         self.manager = StreamManager()
 
-    def add_unary(self, entry: ActionEntry, service_fqn: str) -> None:
-        """Register a unary RPC action endpoint.
+    # ----------------------------
+    # Unary RPC
+    # ----------------------------
 
-        Args:
-            entry: Action entry containing the handler function and types
-            service_fqn: Fully qualified service name for the path
-        """
+    def add_unary(self, entry: ActionEntry, service_fqn: str) -> None:
         self._unaries[entry.name] = entry
         path = f"/{service_fqn}/{entry.name}"
 
         @self.router.post(path)
         async def _handler(request: Request) -> JSONResponse:
+
             try:
                 request_body = await request.json()
             except Exception:
@@ -210,43 +202,46 @@ class ConnectRouter:
                     result = await _maybe_await(entry.func())
                 else:
                     input_type = entry.input_type
-                    if hasattr(input_type, "model_validate"):
-                        validated_arg = input_type.model_validate(request_body)
-                    else:
-                        validated_arg = request_body
+
+                    # VALIDATION
+                    validated_arg = input_type.model_validate(request_body)
+
+                    # Call function
                     result = await _maybe_await(entry.func(validated_arg))
 
+                # DUMP RESULT
                 if hasattr(result, "model_dump"):
-                    result = result.model_dump()
+                    dumped = result.model_dump(by_alias=True)
+                    return JSONResponse(dumped or {})
+
                 return JSONResponse(result or {})
+
             except Exception as exc:
                 return JSONResponse(error_envelope(exc))
 
-    def add_stream(self, entry: StreamEntry, service_fqn: str) -> None:
-        """Register a streaming RPC endpoint.
 
-        Args:
-            entry: Stream entry containing configuration
-            service_fqn: Fully qualified service name for the path
-        """
+    # ----------------------------
+    # Streaming RPC
+    # ----------------------------
+
+    def add_stream(self, entry: StreamEntry, service_fqn: str) -> None:
         self._streams[entry.name] = entry
         self.manager.add_stream(entry)
 
         path = f"/{service_fqn}/{entry.name}"
 
-        async def _stream_iter(subscriber: _Subscriber) -> Any:
-            """Async generator yielding Connect frames for each stream item."""
+        async def _stream_iter(subscriber: _Subscriber):
             try:
                 while True:
-                    stream_item = await subscriber.queue.get()
-                    payload = _serialize_stream_item(stream_item)
+                    item = await subscriber.queue.get()
+                    payload = _serialize_stream_item(item)
                     yield _frame(payload)
                     await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                error_trailer = error_envelope(to_connect_error(exc))
-                yield _frame(error_trailer, trailer=True)
+                trailer = error_envelope(to_connect_error(exc))
+                yield _frame(trailer, trailer=True)
             finally:
                 self.manager.unsubscribe(entry.name, subscriber)
 
@@ -261,18 +256,11 @@ class ConnectRouter:
                 headers={"Transfer-Encoding": "chunked"},
             )
 
+    # ----------------------------
+    # Publisher API
+    # ----------------------------
+
     def publish(self, stream_name: str, item: Any) -> None:
-        """Publish an item to a stream.
-
-        Creates the stream topic if it doesn't exist yet.
-
-        Args:
-            stream_name: Name of the stream
-            item: Item to publish
-
-        Raises:
-            KeyError: If the stream doesn't exist and can't be found
-        """
         if stream_name not in self.manager._topics:
             entry = self._streams.get(stream_name)
             if not entry:
@@ -281,17 +269,12 @@ class ConnectRouter:
         self.manager.publish(stream_name, item)
 
 
+# ============================================================
+# Stream Serialization
+# ============================================================
+
 def _serialize_stream_item(item: Any) -> Dict[str, Any]:
-    if hasattr(item, "model_dump"):
-        dumped = item.model_dump()
-        if isinstance(dumped, dict):
-            return dumped
-        return {"value": dumped}
-    if isinstance(item, dict):
-        return item
-    if isinstance(item, list):
-        return {"value": item}
-    return {"value": item}
+    return _to_serializable(item)
 
 
 async def _maybe_await(value: Any) -> Any:

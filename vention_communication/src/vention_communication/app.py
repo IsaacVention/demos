@@ -7,12 +7,20 @@ from .connect_router import ConnectRouter
 from .decorators import collect_bundle, set_global_app
 from .codegen import generate_proto, sanitize_service_name
 from .entries import RpcBundle
+from .registry import RpcRegistry
 
 
 class VentionApp(FastAPI):
     """
     FastAPI app that registers Connect-style RPCs and streams from decorators.
     Can be extended with external RpcBundles (state-machine, storage, etc.).
+
+    Responsibilities:
+    - Collect bundles (decorators + plugins)
+    - Hand them to RpcRegistry
+    - Use the unified, normalized bundle to:
+        * wire ConnectRouter
+        * optionally generate .proto
     """
 
     def __init__(
@@ -35,8 +43,12 @@ class VentionApp(FastAPI):
         self.name = name
         self.emit_proto = emit_proto
         self.proto_path = proto_path
-        self.connect_router = ConnectRouter()
+
+        # External bundles (from vention-storage, vention-state-machine, etc.)
         self._extra_bundles: List[RpcBundle] = []
+
+        # Registry that owns the canonical bundle + aliasing
+        self._registry = RpcRegistry(service_name=self.service_name)
 
     def register_rpc_plugin(self, bundle: RpcBundle) -> None:
         """Add RPCs/streams provided by external libraries.
@@ -51,31 +63,51 @@ class VentionApp(FastAPI):
     def finalize(self) -> None:
         """Finalize the app by registering all RPCs and streams.
 
-        Collects decorator-registered RPCs, merges external bundles,
-        registers them with the Connect router, optionally emits proto
-        definitions, and makes the app available to stream publishers.
+        Steps:
+        - Collect decorator-registered RPCs
+        - Merge in external bundles
+        - Use RpcRegistry to:
+            * apply aliases to all Pydantic models
+            * provide a unified RpcBundle
+        - Wire actions/streams into ConnectRouter
+        - Mount router at /rpc
+        - Optionally generate .proto
+        - Expose global app for stream publishers
         """
-        bundle = collect_bundle()
+        # 1) Collect local bundle from decorators
+        base_bundle = collect_bundle()
+
+        # 2) Register bundles with the registry
+        self._registry.add_bundle(base_bundle)
         for extra_bundle in self._extra_bundles:
-            bundle.extend(extra_bundle)
+            self._registry.add_bundle(extra_bundle)
 
-        service_fully_qualified_name = f"vention.app.v1.{self.service_name}Service"
+        # 3) Get the unified, normalized bundle (aliases applied)
+        unified_bundle = self._registry.get_unified_bundle()
 
-        for action_entry in bundle.actions:
-            self.connect_router.add_unary(action_entry, service_fully_qualified_name)
-        for stream_entry in bundle.streams:
-            self.connect_router.add_stream(stream_entry, service_fully_qualified_name)
+        # 4) Wire up ConnectRouter
+        service_fqn = f"vention.app.v1.{self.service_name}Service"
+        self.connect_router = ConnectRouter() 
+
+        for action_entry in unified_bundle.actions:
+            self.connect_router.add_unary(action_entry, service_fqn)
+
+        for stream_entry in unified_bundle.streams:
+            self.connect_router.add_stream(stream_entry, service_fqn)
 
         self.include_router(self.connect_router.router, prefix="/rpc")
 
+        # 5) Optionally generate proto from the same unified bundle
         if self.emit_proto:
-            proto = generate_proto(self.service_name, bundle=bundle)
+            proto_text = generate_proto(self.service_name, bundle=unified_bundle)
+
             import os
 
             os.makedirs(os.path.dirname(self.proto_path), exist_ok=True)
-            with open(self.proto_path, "w", encoding="utf-8") as proto_file:
-                proto_file.write(proto)
+            with open(self.proto_path, "w", encoding="utf-8") as f:
+                f.write(proto_text)
 
+        # 6) Make the app visible to @stream publisher wrappers
         set_global_app(self)
 
     @property

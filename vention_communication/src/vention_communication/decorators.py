@@ -8,8 +8,11 @@ if TYPE_CHECKING:
 from .entries import ActionEntry, StreamEntry
 from .typing_utils import infer_input_type, infer_output_type, is_pydantic_model
 
+# Global registries populated by decorators
 _actions: List[ActionEntry] = []
 _streams: List[StreamEntry] = []
+
+# Global app reference used by stream publishers
 _GLOBAL_APP: Optional["VentionApp"] = None
 
 
@@ -38,9 +41,15 @@ def action(
     def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
         input_type = infer_input_type(function)
         output_type = infer_output_type(function)
+
         entry = ActionEntry(
-            name or function.__name__, function, input_type, output_type
+            name or function.__name__,
+            function,
+            input_type,
+            output_type,
         )
+
+        # Just register the entry; aliasing is now handled centrally by the registry
         _actions.append(entry)
         return function
 
@@ -84,11 +93,14 @@ def stream(
             queue_maxsize=queue_maxsize,
             policy=policy,
         )
+
+        # Again: aliasing for payload models is handled centrally
         _streams.append(entry)
 
         async def publisher_wrapper(*args: Any, **kwargs: Any) -> Any:
             if _GLOBAL_APP is None or _GLOBAL_APP.connect_router is None:
                 raise RuntimeError("Stream publish called before app.finalize()")
+
             result = await function(*args, **kwargs)
             _GLOBAL_APP.connect_router.publish(name, result)
             return None
