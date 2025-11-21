@@ -4,10 +4,6 @@ package vention.app.v1;
 import "google/protobuf/empty.proto";
 
 
-message SimonResponse {
-  string message = 1;
-}
-
 message StateResponse {
   string state = 1;
   string last_state = 2;
@@ -182,7 +178,6 @@ message CountdownEvent {
 }
 
 service VentionAppService {
-  rpc simon_say_hello (google.protobuf.Empty) returns (SimonResponse);
   rpc GetState (google.protobuf.Empty) returns (StateResponse);
   rpc GetHistory (google.protobuf.Empty) returns (HistoryResponse);
   rpc Trigger_Answer_submitted (google.protobuf.Empty) returns (TriggerResponse);
