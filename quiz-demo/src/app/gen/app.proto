@@ -1,0 +1,216 @@
+syntax = "proto3";
+package vention.app.v1;
+
+import "google/protobuf/empty.proto";
+
+
+message StateResponse {
+  string state = 1;
+  string last_state = 2;
+}
+
+message HistoryEntry {
+  string timestamp = 1;
+  string state = 2;
+  int32 duration_ms = 3;
+}
+
+message HistoryResponse {
+  repeated HistoryEntry history = 1;
+  int32 buffer_size = 2;
+}
+
+message TriggerResponse {
+  string result = 1;
+  string previous_state = 2;
+  string new_state = 3;
+}
+
+message CrudListRequest {
+  bool include_deleted = 1;
+}
+
+message Quiz {
+  int32 id = 1;
+  int32 box_height = 2;
+  int32 num_boxes = 3;
+  bool can_reach = 4;
+  bool correct = 5;
+}
+
+message QuizListResponse {
+  repeated Quiz records = 1;
+}
+
+message CrudGetRequest {
+  int32 record_id = 1;
+  bool include_deleted = 2;
+}
+
+message QuizGetResponse {
+  Quiz record = 1;
+}
+
+message QuizCreateRequest {
+  Quiz record = 1;
+  string actor = 2;
+}
+
+message QuizCreateResponse {
+  Quiz record = 1;
+}
+
+message QuizUpdateRequest {
+  int32 record_id = 1;
+  Quiz record = 2;
+  string actor = 3;
+}
+
+message QuizUpdateResponse {
+  Quiz record = 1;
+}
+
+message CrudDeleteRequest {
+  int32 record_id = 1;
+  string actor = 2;
+}
+
+message QuizStatusResponse {
+  string status = 1;
+}
+
+message CrudRestoreRequest {
+  int32 record_id = 1;
+  string actor = 2;
+}
+
+message QuizRestoreResponse {
+  Quiz record = 1;
+}
+
+message Configuration {
+  int32 id = 1;
+  int32 max_box_height = 2;
+  int32 timeout_seconds = 3;
+  int32 robot_reach = 4;
+}
+
+message ConfigListResponse {
+  repeated Configuration records = 1;
+}
+
+message ConfigGetResponse {
+  Configuration record = 1;
+}
+
+message ConfigCreateRequest {
+  Configuration record = 1;
+  string actor = 2;
+}
+
+message ConfigCreateResponse {
+  Configuration record = 1;
+}
+
+message ConfigUpdateRequest {
+  int32 record_id = 1;
+  Configuration record = 2;
+  string actor = 3;
+}
+
+message ConfigUpdateResponse {
+  Configuration record = 1;
+}
+
+message ConfigStatusResponse {
+  string status = 1;
+}
+
+message ConfigRestoreResponse {
+  Configuration record = 1;
+}
+
+message HealthResponse {
+  string status = 1;
+}
+
+message AuditQueryRequest {
+  string component = 1;
+  int32 record_id = 2;
+  string actor = 3;
+  string operation = 4;
+  string since = 5;
+  string until = 6;
+  int32 limit = 7;
+  int32 offset = 8;
+}
+
+message AuditListResponse {
+  repeated string records = 1;
+}
+
+message FileResponse {
+  string filename = 1;
+  string bytes = 2;
+}
+
+message DatabaseRestoreRequest {
+  string bytes = 1;
+  string filename = 2;
+  bool integrity_check = 3;
+  bool dry_run = 4;
+}
+
+message DatabaseRestoreResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message StateChangeEvent {
+  string old_state = 1;
+  string new_state = 2;
+  string trigger = 3;
+  int32 time_remaining = 4;
+}
+
+message CountdownEvent {
+  int32 time_remaining = 1;
+}
+
+service VentionAppService {
+  rpc GetState (google.protobuf.Empty) returns (StateResponse);
+  rpc GetHistory (google.protobuf.Empty) returns (HistoryResponse);
+  rpc Trigger_Answer_submitted (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Problem_generated (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Problem_presented (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Recover__QuizStates_generating (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Recover__QuizStates_grading (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Recover__QuizStates_presenting (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Reset (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_Start (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_To_QuizStates (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_To_QuizStates_generating (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_To_QuizStates_grading (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_To_QuizStates_presenting (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_To_fault (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Trigger_To_ready (google.protobuf.Empty) returns (TriggerResponse);
+  rpc Quiz_ListRecords (CrudListRequest) returns (QuizListResponse);
+  rpc Quiz_GetRecord (CrudGetRequest) returns (QuizGetResponse);
+  rpc Quiz_CreateRecord (QuizCreateRequest) returns (QuizCreateResponse);
+  rpc Quiz_UpdateRecord (QuizUpdateRequest) returns (QuizUpdateResponse);
+  rpc Quiz_DeleteRecord (CrudDeleteRequest) returns (QuizStatusResponse);
+  rpc Quiz_RestoreRecord (CrudRestoreRequest) returns (QuizRestoreResponse);
+  rpc Config_ListRecords (CrudListRequest) returns (ConfigListResponse);
+  rpc Config_GetRecord (CrudGetRequest) returns (ConfigGetResponse);
+  rpc Config_CreateRecord (ConfigCreateRequest) returns (ConfigCreateResponse);
+  rpc Config_UpdateRecord (ConfigUpdateRequest) returns (ConfigUpdateResponse);
+  rpc Config_DeleteRecord (CrudDeleteRequest) returns (ConfigStatusResponse);
+  rpc Config_RestoreRecord (CrudRestoreRequest) returns (ConfigRestoreResponse);
+  rpc Database_Health (google.protobuf.Empty) returns (HealthResponse);
+  rpc Database_ReadAudit (AuditQueryRequest) returns (AuditListResponse);
+  rpc Database_ExportZip (google.protobuf.Empty) returns (FileResponse);
+  rpc Database_BackupSqlite (google.protobuf.Empty) returns (FileResponse);
+  rpc Database_RestoreSqlite (DatabaseRestoreRequest) returns (DatabaseRestoreResponse);
+  rpc state_change (google.protobuf.Empty) returns (stream StateChangeEvent);
+  rpc countdown (google.protobuf.Empty) returns (stream CountdownEvent);
+}
