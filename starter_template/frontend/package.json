@@ -1,0 +1,50 @@
+{
+  "name": "machine-code-demo-cad",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+  },
+  "dependencies": {
+    "@emotion/react": "11.13.3",
+    "@emotion/styled": "11.13.0",
+    "@mui/icons-material": "5.16.7",
+    "@mui/material": "5.16.7",
+    "@mui/styles": "5.16.7",
+    "@tabler/icons-react": "3.35.0",
+    "@vention/machine-logic-ui-sdk": "0.26.1",
+    "@vention/machine-ui": "3.31.1",
+    "@vention/machine-apps-components": "0.3.5",
+    "buffer": "6.0.3",
+    "dayjs": "1.11.18",
+    "mqtt": "5.10.1",
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "react-draggable": "4.4.6",
+    "react-hook-form": "7.53.0",
+    "react-router-dom": "6.26.2",
+    "tss-react": "4.9.13"
+  },
+  "devDependencies": {
+    "@types/node": "20.0.0",
+    "@types/react": "17.0.82",
+    "@types/react-dom": "17.0.25",
+    "@typescript-eslint/eslint-plugin": "8.36.0",
+    "@typescript-eslint/parser": "8.36.0",
+    "@vitejs/plugin-react": "5.0.0",
+    "eslint": "8.57.0",
+    "eslint-plugin-react": "7.36.0",
+    "eslint-plugin-react-hooks": "5.0.0",
+    "eslint-plugin-react-refresh": "0.4.5",
+    "typescript": "5.4.5",
+    "vite": "6.4.1",
+    "vite-tsconfig-paths": "5.1.4"
+  },
+  "engines": {
+    "node": ">=22",
+    "npm": ">=9"
+  }
+}

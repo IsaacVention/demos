@@ -4,30 +4,8 @@ package vention.app.v1;
 import "google/protobuf/empty.proto";
 
 
-enum StateMachineStates {
-  QuizStates = 0;
-  QuizStates_generating = 1;
-  QuizStates_presenting = 2;
-  QuizStates_grading = 3;
-  ready = 4;
-  fault = 5;
-}
-
-enum StateMachineTriggers {
-  to_QuizStates = 0;
-  to_QuizStates_generating = 1;
-  to_QuizStates_presenting = 2;
-  to_QuizStates_grading = 3;
-  to_ready = 4;
-  to_fault = 5;
-  start = 6;
-  problem_generated = 7;
-  problem_presented = 8;
-  answer_submitted = 9;
-  recover__QuizStates_generating = 10;
-  recover__QuizStates_presenting = 11;
-  recover__QuizStates_grading = 12;
-  reset = 13;
+message SimonResponse {
+  string message = 1;
 }
 
 message StateResponse {
@@ -180,14 +158,14 @@ message FileResponse {
   string bytes = 2;
 }
 
-message RestoreRequest {
+message DatabaseRestoreRequest {
   string bytes = 1;
   string filename = 2;
   bool integrity_check = 3;
   bool dry_run = 4;
 }
 
-message RestoreResponse {
+message DatabaseRestoreResponse {
   bool ok = 1;
   string message = 2;
 }
@@ -199,7 +177,12 @@ message StateChangeEvent {
   int32 time_remaining = 4;
 }
 
+message CountdownEvent {
+  int32 time_remaining = 1;
+}
+
 service VentionAppService {
+  rpc simon_say_hello (google.protobuf.Empty) returns (SimonResponse);
   rpc GetState (google.protobuf.Empty) returns (StateResponse);
   rpc GetHistory (google.protobuf.Empty) returns (HistoryResponse);
   rpc Trigger_Answer_submitted (google.protobuf.Empty) returns (TriggerResponse);
@@ -232,6 +215,7 @@ service VentionAppService {
   rpc Database_ReadAudit (AuditQueryRequest) returns (AuditListResponse);
   rpc Database_ExportZip (google.protobuf.Empty) returns (FileResponse);
   rpc Database_BackupSqlite (google.protobuf.Empty) returns (FileResponse);
-  rpc Database_RestoreSqlite (RestoreRequest) returns (RestoreResponse);
+  rpc Database_RestoreSqlite (DatabaseRestoreRequest) returns (DatabaseRestoreResponse);
   rpc state_change (google.protobuf.Empty) returns (stream StateChangeEvent);
+  rpc countdown (google.protobuf.Empty) returns (stream CountdownEvent);
 }

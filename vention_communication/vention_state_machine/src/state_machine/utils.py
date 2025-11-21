@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Any, Callable, Optional, Union
 from pydantic import BaseModel
-from vention_state_machine.src.state_machine.defs import StateGroup
-
+from vention_state_machine.src.state_machine.defs import StateGroup, State
 
 def wrap_with_timeout(
     handler: Callable[[Any], Any],

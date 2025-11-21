@@ -1,0 +1,4 @@
+vention-communication==0.2.2
+vention-storage==0.6
+vention-state-machine==0.4
+uvicorn==0.35.0

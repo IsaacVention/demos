@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import inspect
 from datetime import datetime
-from typing import Optional, Sequence
+from typing import Optional, OrderedDict, Sequence
+from enum import Enum
 
 from src.vention_communication.entries import RpcBundle, ActionEntry
 from src.vention_communication.errors import ConnectError
@@ -13,10 +14,19 @@ from vention_state_machine.src.state_machine.utils import (
     HistoryEntry,
     TriggerResponse,
 )
+from vention_state_machine.src.state_machine.defs import StateGroup
 
 
 __all__ = ["build_state_machine_bundle"]
 
+
+def _build_state_enum(sm: StateMachine):
+    states = list(sm.get_nested_state_names())
+    return Enum("StateMachineStates", {s: s for s in states})
+
+def _build_trigger_enum(state_machine: StateMachine):
+    triggers = list(state_machine.events.keys())
+    return Enum("StateMachineTriggers", {t: t for t in triggers})
 
 def build_state_machine_bundle(
     sm: StateMachine,
@@ -163,5 +173,11 @@ def build_state_machine_bundle(
                 output_type=TriggerResponse,
             )
         )
+        
+    StatesEnum = _build_state_enum(sm)
+    TriggersEnum = _build_trigger_enum(sm)
+
+    bundle.models.append(StatesEnum)
+    bundle.models.append(TriggersEnum)
 
     return bundle

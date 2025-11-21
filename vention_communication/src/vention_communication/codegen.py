@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 from .decorators import collect_bundle
 from .typing_utils import is_pydantic_model
 from .entries import RpcBundle, StreamEntry
+import enum
 
 _SCALAR_MAP = {
     int: "int32",
@@ -18,6 +19,9 @@ package vention.app.v1;
 import "google/protobuf/empty.proto";
 
 """
+
+def is_enum_type(t: Any) -> bool:
+    return isinstance(t, type) and issubclass(t, enum.Enum)
 
 
 def _unwrap_optional(type_annotation: Any) -> tuple[Any, bool]:
@@ -51,15 +55,20 @@ def _determine_proto_type_for_field(
     if inner_type in _SCALAR_MAP:
         return _SCALAR_MAP[inner_type]
 
+    if is_enum_type(inner_type):
+        enum_name = inner_type.__name__
+        if enum_name not in seen_models:
+            seen_models.add(enum_name)
+            lines.extend(_generate_enum_definition(inner_type))
+        return enum_name
+
     if is_pydantic_model(inner_type):
         model_name = inner_type.__name__
-        # Recursively register nested model if not seen before
         if model_name not in seen_models:
             seen_models.add(model_name)
             lines.extend(_generate_pydantic_message(inner_type, seen_models, lines))
         return model_name
 
-    # Fallback to string for unknown types
     return "string"
 
 
@@ -118,6 +127,17 @@ def _generate_scalar_wrapper_message(
     ]
     return lines
 
+def _generate_enum_definition(enum_type: Type[enum.Enum]) -> list[str]:
+    lines = [f"enum {enum_type.__name__} {{"]
+    value = 0
+    for member in enum_type:
+        # Protobuf enum values must be ALL CAPS and start with a letter.
+        name = str(member.name)
+        lines.append(f"  {name} = {value};")
+        value += 1
+    lines.append("}\n")
+    return lines
+
 
 def _proto_type_name(
     type_annotation: Optional[Type[Any]],
@@ -151,8 +171,15 @@ def _register_pydantic_model(
         return
 
     inner_type, _ = _unwrap_optional(type_annotation)
-
     list_inner_type, _ = _unwrap_list(inner_type)
+
+    # ➜ NEW: ENUM SUPPORT
+    if is_enum_type(list_inner_type):
+        enum_name = list_inner_type.__name__
+        if enum_name not in seen_models:
+            seen_models.add(enum_name)
+            lines.extend(_generate_enum_definition(list_inner_type))
+        return
 
     if is_pydantic_model(list_inner_type):
         model_name = list_inner_type.__name__
@@ -188,6 +215,19 @@ def _collect_message_types(
     seen_models: set[str],
     scalar_wrappers: Dict[str, str],
 ) -> None:
+    for model in getattr(bundle, "models", []):
+        if is_enum_type(model):
+            enum_name = model.__name__
+            if enum_name not in seen_models:
+                seen_models.add(enum_name)
+                lines.extend(_generate_enum_definition(model))
+        elif is_pydantic_model(model):
+            model_name = model.__name__
+            if model_name not in seen_models:
+                seen_models.add(model_name)
+                lines.extend(_generate_pydantic_message(model, seen_models, lines))
+
+    # existing logic
     for action_entry in bundle.actions:
         _register_pydantic_model(action_entry.input_type, seen_models, lines)
         _register_pydantic_model(action_entry.output_type, seen_models, lines)
@@ -220,7 +260,6 @@ def _generate_service_rpcs(
 def generate_proto(app_name: str, *, bundle: Optional[RpcBundle] = None) -> str:
     if bundle is None:
         bundle = collect_bundle()
-
     lines: list[str] = [HEADER]
     seen_models: set[str] = set()
     scalar_wrappers: Dict[str, str] = {}

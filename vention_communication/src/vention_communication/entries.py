@@ -31,6 +31,7 @@ class RpcBundle:
 
     actions: list[ActionEntry] = field(default_factory=list)
     streams: list[StreamEntry] = field(default_factory=list)
+    models: list[Any] = field(default_factory=list)
 
     def extend(self, other: "RpcBundle") -> None:
         """Extend this bundle with actions and streams from another bundle.
@@ -40,3 +41,4 @@ class RpcBundle:
         """
         self.actions.extend(other.actions)
         self.streams.extend(other.streams)
+        self.models.extend(other.models)
